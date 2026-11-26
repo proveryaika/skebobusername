@@ -25,7 +25,11 @@ async function telegram(method: string, body: Record<string, unknown>) {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
   });
   const data = await response.json();
-  if (!response.ok || !data.ok) throw new Error("Telegram API " + method + ": " + JSON.stringify(data));
+  if (!response.ok || !data.ok) {
+    const description = String(data?.description ?? "");
+    if (method === "answerCallbackQuery" && (description.includes("query is too old") || description.includes("query ID is invalid"))) return null;
+    throw new Error("Telegram API " + method + ": " + JSON.stringify(data));
+  }
   return data.result;
 }
 
@@ -461,6 +465,9 @@ async function checkGramPayment(userId: number, paymentId: string, chatId: numbe
   const response = await fetch("https://toncenter.com/api/v3/transactions?" + params.toString(), {
     headers: { "X-API-Key": TONCENTER_API_KEY },
   });
+  if (response.status === 401 || response.status === 403) {
+    throw new Error("TON Center отклонил API-ключ (ошибка " + response.status + "). Проверь секрет TONCENTER_API_KEY в Supabase: нужен действующий API key из личного кабинета TON Center, без пробелов и без кавычек.");
+  }
   if (!response.ok) throw new Error("TON Center временно недоступен (" + response.status + "). Попробуй проверить ещё раз.");
   const data = await response.json();
   const txs = Array.isArray(data?.transactions) ? data.transactions : [];
@@ -471,8 +478,7 @@ async function checkGramPayment(userId: number, paymentId: string, chatId: numbe
     const decoded = msg?.message_content?.decoded;
     const comment = decoded?.comment ?? decoded?.text ?? msg?.decoded_comment ?? "";
     const value = BigInt(String(msg?.value ?? "0"));
-    return String(msg?.destination ?? "") === String(tx?.account ?? "") &&
-      value === expectedNano && String(comment) === expectedComment &&
+    value === expectedNano && String(comment) === expectedComment &&
       tx?.description?.aborted === false && tx?.description?.compute_ph?.success === true;
   });
   if (!found) {
@@ -585,7 +591,14 @@ async function handleCallback(callback: any) {
     return;
   }
   if (data.startsWith("gram:check:")) {
-    await checkGramPayment(userId, data.slice("gram:check:".length), chatId);
+    try {
+      await checkGramPayment(userId, data.slice("gram:check:".length), chatId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Не удалось проверить платёж.";
+      await editScreen(chatId, messageId, "⚠️ ПРОВЕРКА ОПЛАТЫ\n━━━━━━━━━━━━━━\n\n" + message, {
+        inline_keyboard: [[{ text: "🔄 Повторить проверку", callback_data: data }], [{ text: "⬅️ К тарифам", callback_data: "premium:crypto" }], ...backMain],
+      });
+    }
     return;
   }
   if (data === "crypto:custom") {

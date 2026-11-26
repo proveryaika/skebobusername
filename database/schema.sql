@@ -35,7 +35,7 @@ create table public.referrals (
 );
 create table public.bot_sessions (
  telegram_id bigint primary key references public.profiles(telegram_id) on delete cascade,
- state text not null check (state in ('await_word','await_mask')),
+ state text not null check (state in ('await_word','await_mask','await_trap_username','await_premium_days')),
  payload jsonb not null default '{}'::jsonb, updated_at timestamptz not null default now()
 );
 create table public.search_jobs (

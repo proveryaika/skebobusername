@@ -309,6 +309,12 @@ async function showPremium(userId: number, chatId: number, messageId: number) {
 }
 
 async function showStars(userId: number, chatId: number, messageId: number) {
+  await telegram("setWebhook", {
+    url: SUPABASE_URL + "/functions/v1/telegram-webhook",
+    secret_token: WEBHOOK_SECRET,
+    allowed_updates: ["message", "callback_query", "pre_checkout_query"],
+    drop_pending_updates: false,
+  });
   await editScreen(chatId, messageId,
     "⭐ ОПЛАТА ЗВЁЗДАМИ\n━━━━━━━━━━━━━━\n\n" +
     "⭐ 25 звёзд = 1 день Премиума\n" +

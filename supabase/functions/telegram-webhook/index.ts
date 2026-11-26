@@ -191,7 +191,7 @@ async function handleStart(message: any) {
     }
   }
   await clearSession(user.id);
-  await show(chatId, "👋 Привет, " + (user.first_name ?? "друг") + "!\n\nДобро пожаловать в Skebob Username.\nВыбери раздел 👇", mainKeyboardFor(userId));
+  await show(chatId, "👋 Привет, " + (user.first_name ?? "друг") + "!\n\nДобро пожаловать в Skebob Username.\nВыбери раздел 👇", mainKeyboardFor(user.id));
 }
 
 async function runSearch(userId: number, chatId: number, mode: string, options: { digits?: boolean; query?: string } = {}) {
@@ -389,7 +389,7 @@ async function handleSuccessfulStarsPayment(message: any) {
   if (!order || Number(order.telegram_id) !== Number(message.from?.id) ||
       Number(order.stars) !== Number(payment.total_amount)) {
     console.error("Unmatched Telegram Stars payment", { payload, userId: message.from?.id, amount: payment.total_amount });
-    await show(message.chat.id, "⚠️ Платёж получен, но заказ не удалось сопоставить автоматически. Не оплачивай повторно — напиши в поддержку.", mainKeyboardFor(userId));
+    await show(message.chat.id, "⚠️ Платёж получен, но заказ не удалось сопоставить автоматически. Не оплачивай повторно — напиши в поддержку.", mainKeyboardFor(Number(message.from?.id)));
     return;
   }
   const result = await db("rpc/credit_star_payment", "POST", {
@@ -397,11 +397,11 @@ async function handleSuccessfulStarsPayment(message: any) {
     p_charge_id: payment.telegram_payment_charge_id,
   });
   if (result?.credited) {
-    await show(message.chat.id, "🎉 Оплата получена!\n\n⭐ Списано · " + payment.total_amount + " Stars\n👑 Начислено · " + result.days + " дн. Premium\n\nСпасибо за поддержку!", mainKeyboardFor(userId));
+    await show(message.chat.id, "🎉 Оплата получена!\n\n⭐ Списано · " + payment.total_amount + " Stars\n👑 Начислено · " + result.days + " дн. Premium\n\nСпасибо за поддержку!", mainKeyboardFor(Number(message.from?.id)));
   } else if (result?.reason === "already_paid") {
-    await show(message.chat.id, "✅ Этот платёж уже обработан. Premium активен.", mainKeyboardFor(userId));
+    await show(message.chat.id, "✅ Этот платёж уже обработан. Premium активен.", mainKeyboardFor(Number(message.from?.id)));
   } else {
-    await show(message.chat.id, "⚠️ Telegram подтвердил оплату, но Premium не начислен автоматически. Не оплачивай повторно — напиши в поддержку.", mainKeyboardFor(userId));
+    await show(message.chat.id, "⚠️ Telegram подтвердил оплату, но Premium не начислен автоматически. Не оплачивай повторно — напиши в поддержку.", mainKeyboardFor(Number(message.from?.id)));
     console.error("Stars credit failed", result);
   }
 }
@@ -706,7 +706,7 @@ async function handleMessage(message: any) {
         return;
       }
       await setSession(userId, "await_admin_premium_minutes", { target_telegram_id: targetId });
-      await show(chatId, "⏱ На сколько минут выдать Premium профилю " + targetId + "?\\nВведи целое число от 1 до 525600 (до 1 года).", {
+      await show(chatId, "⏱ На сколько минут выдать Premium профилю " + targetId + "?\nВведи целое число от 1 до 525600 (до 1 года).", {
         inline_keyboard: [[{ text: "Отмена", callback_data: "admin:cancel" }], ...backMain],
       });
       return;
@@ -721,7 +721,7 @@ async function handleMessage(message: any) {
       if (!Number.isSafeInteger(targetId) || targetId <= 0) throw new Error("Сессия выдачи Premium повреждена. Начни заново.");
       const until = await grantPremiumMinutes(targetId, minutes);
       await clearSession(userId);
-      await show(chatId, "✅ Premium выдан!\\n\\n🆔 ID профиля · " + targetId + "\\n⏱ Добавлено · " + minutes + " мин.\\n👑 Действует до · " + new Date(until).toLocaleString("ru-RU"), {
+      await show(chatId, "✅ Premium выдан!\n\n🆔 ID профиля · " + targetId + "\n⏱ Добавлено · " + minutes + " мин.\n👑 Действует до · " + new Date(until).toLocaleString("ru-RU"), {
         inline_keyboard: [[{ text: "Выдать ещё", callback_data: "admin:premium" }], ...backMain],
       });
       return;
@@ -746,6 +746,7 @@ async function handleMessage(message: any) {
     const retryCallback = session.state === "await_word" ? "mode:word"
       : session.state === "await_mask" ? "mode:mask"
       : session.state === "await_trap_username" ? "trap:add"
+      : session.state.startsWith("await_admin_") ? "admin:premium"
       : "premium:crypto";
     await show(chatId, (error as Error).message + "\n\nПопробуй ещё раз или вернись в меню.", {
       inline_keyboard: [[{ text: "Повторить ввод", callback_data: retryCallback }], ...backMain],
@@ -767,7 +768,7 @@ async function handleCallback(callback: any) {
       return;
     }
     await setSession(userId, "await_admin_premium_user_id");
-    await editScreen(chatId, messageId, "🛠 Выдача Premium по ID\\n━━━━━━━━━━━━━━\\n\\nОтправь Telegram ID профиля, которому нужно выдать Premium.", {
+    await editScreen(chatId, messageId, "🛠 Выдача Premium по ID\n━━━━━━━━━━━━━━\n\nОтправь Telegram ID профиля, которому нужно выдать Premium.", {
       inline_keyboard: [[{ text: "Отмена", callback_data: "admin:cancel" }], ...backMain],
     });
     return;

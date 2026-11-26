@@ -49,3 +49,12 @@ After adding secrets, register the Telegram webhook with Bot API `setWebhook`, u
 
 - Never commit `.env`, bot tokens, Supabase secret keys, or webhook secrets.
 - Never put the Supabase service-role key in a client app.
+
+
+## Current bot features
+
+- Inline menu for search, profile, referrals, premium, and support (premium/support buttons are intentionally inactive).
+- Candidate generation for 5- and 6-character usernames, word-based suggestions, masks using `?`, and a short-name/trap mode.
+- Search history, saved favorites, referral link/statistics, and profile summary.
+- Free tier: 5 search runs per day; active premium profiles are exempt.
+- Important limitation: candidates are generated suggestions only. Telegram Bot API does not expose a reliable method to check whether arbitrary personal usernames are available. The bot labels this clearly and opens each candidate in Telegram for manual checking; no candidate is represented as confirmed available.

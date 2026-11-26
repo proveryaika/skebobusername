@@ -7,11 +7,18 @@ const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const TONCENTER_API_KEY = Deno.env.get("TONCENTER_API_KEY") ?? "";
 const GRAM_RECEIVE_ADDRESS = "UQDVnyA5v_uLgb7lh_JRe5RfPVhj0MebqrRt0LdlJkavsQuP";
 
-const mainKeyboard = { inline_keyboard: [
+const BOT_OWNER_ID = 8032877285;
+const baseMainKeyboard = [
   [{ text: "🔍 Поиск", callback_data: "menu:search" }],
   [{ text: "👤 Профиль", callback_data: "menu:profile" }, { text: "👥 Рефералы", callback_data: "menu:referrals" }],
   [{ text: "👑 Премиум", callback_data: "menu:premium" }, { text: "💬 Поддержка", callback_data: "menu:support" }],
-]};
+];
+function mainKeyboardFor(userId: number) {
+  return { inline_keyboard: [
+    ...baseMainKeyboard,
+    ...(userId === BOT_OWNER_ID ? [[{ text: "🛠 Выдать премиум по ID", callback_data: "admin:premium" }]] : []),
+  ] };
+}
 const backMain = [[{ text: "Главное меню", callback_data: "menu:home" }]];
 const searchKeyboard = { inline_keyboard: [
   [{ text: "5 букв", callback_data: "mode:five" }, { text: "6 букв", callback_data: "mode:six" }],
@@ -144,6 +151,17 @@ async function clearSession(userId: number) {
   await db("bot_sessions?telegram_id=eq." + userId, "DELETE");
 }
 
+async function grantPremiumMinutes(targetUserId: number, minutes: number) {
+  const rows = await db("profiles?select=premium_until&telegram_id=eq." + targetUserId + "&limit=1");
+  if (!Array.isArray(rows) || !rows.length) throw new Error("Профиль с таким ID не найден. Проверь ID и отправь его ещё раз.");
+  const now = Date.now();
+  const current = rows[0].premium_until ? new Date(rows[0].premium_until).getTime() : 0;
+  const base = Number.isFinite(current) ? Math.max(now, current) : now;
+  const until = new Date(base + minutes * 60_000).toISOString();
+  await db("profiles?telegram_id=eq." + targetUserId, "PATCH", { premium_until: until, updated_at: new Date().toISOString() });
+  return until;
+}
+
 async function handleStart(message: any) {
   const user = message.from;
   const chatId = message.chat.id;
@@ -169,11 +187,11 @@ async function handleStart(message: any) {
       const premiumText = reward.premium_day === true
         ? "\n\n👑 Поздравляем! За 5 приглашённых пользователей тебе начислен 1 день Премиума!"
         : "";
-      await show(referredBy, bonusText + premiumText, mainKeyboard);
+      await show(referredBy, bonusText + premiumText, mainKeyboardFor(referredBy));
     }
   }
   await clearSession(user.id);
-  await show(chatId, "👋 Привет, " + (user.first_name ?? "друг") + "!\n\nДобро пожаловать в Skebob Username.\nВыбери раздел 👇", mainKeyboard);
+  await show(chatId, "👋 Привет, " + (user.first_name ?? "друг") + "!\n\nДобро пожаловать в Skebob Username.\nВыбери раздел 👇", mainKeyboardFor(userId));
 }
 
 async function runSearch(userId: number, chatId: number, mode: string, options: { digits?: boolean; query?: string } = {}) {
@@ -371,7 +389,7 @@ async function handleSuccessfulStarsPayment(message: any) {
   if (!order || Number(order.telegram_id) !== Number(message.from?.id) ||
       Number(order.stars) !== Number(payment.total_amount)) {
     console.error("Unmatched Telegram Stars payment", { payload, userId: message.from?.id, amount: payment.total_amount });
-    await show(message.chat.id, "⚠️ Платёж получен, но заказ не удалось сопоставить автоматически. Не оплачивай повторно — напиши в поддержку.", mainKeyboard);
+    await show(message.chat.id, "⚠️ Платёж получен, но заказ не удалось сопоставить автоматически. Не оплачивай повторно — напиши в поддержку.", mainKeyboardFor(userId));
     return;
   }
   const result = await db("rpc/credit_star_payment", "POST", {
@@ -379,11 +397,11 @@ async function handleSuccessfulStarsPayment(message: any) {
     p_charge_id: payment.telegram_payment_charge_id,
   });
   if (result?.credited) {
-    await show(message.chat.id, "🎉 Оплата получена!\n\n⭐ Списано · " + payment.total_amount + " Stars\n👑 Начислено · " + result.days + " дн. Premium\n\nСпасибо за поддержку!", mainKeyboard);
+    await show(message.chat.id, "🎉 Оплата получена!\n\n⭐ Списано · " + payment.total_amount + " Stars\n👑 Начислено · " + result.days + " дн. Premium\n\nСпасибо за поддержку!", mainKeyboardFor(userId));
   } else if (result?.reason === "already_paid") {
-    await show(message.chat.id, "✅ Этот платёж уже обработан. Premium активен.", mainKeyboard);
+    await show(message.chat.id, "✅ Этот платёж уже обработан. Premium активен.", mainKeyboardFor(userId));
   } else {
-    await show(message.chat.id, "⚠️ Telegram подтвердил оплату, но Premium не начислен автоматически. Не оплачивай повторно — напиши в поддержку.", mainKeyboard);
+    await show(message.chat.id, "⚠️ Telegram подтвердил оплату, но Premium не начислен автоматически. Не оплачивай повторно — напиши в поддержку.", mainKeyboardFor(userId));
     console.error("Stars credit failed", result);
   }
 }
@@ -514,11 +532,11 @@ async function checkGramPayment(userId: number, paymentId: string, chatId: numbe
   const rows = await db("gram_payments?select=id,days,nano_amount,payment_comment,status,expires_at,telegram_id&id=eq." + encodeURIComponent(paymentId) + "&limit=1");
   const payment = rows?.[0];
   if (!payment || Number(payment.telegram_id) !== userId) {
-    await show(chatId, "Платёж не найден.", mainKeyboard);
+    await show(chatId, "Платёж не найден.", mainKeyboardFor(userId));
     return;
   }
   if (payment.status === "paid") {
-    await show(chatId, "✅ Этот платёж уже подтверждён. Premium начислен.", mainKeyboard);
+    await show(chatId, "✅ Этот платёж уже подтверждён. Premium начислен.", mainKeyboardFor(userId));
     return;
   }
   if (payment.status !== "pending" || new Date(payment.expires_at).getTime() < Date.now()) {
@@ -556,11 +574,11 @@ async function checkGramPayment(userId: number, paymentId: string, chatId: numbe
   if (!txHash) throw new Error("В транзакции отсутствует hash. Обратись в поддержку.");
   const result = await db("rpc/credit_gram_payment", "POST", { p_payment_id: paymentId, p_tx_hash: txHash });
   if (result?.credited) {
-    await show(chatId, "🎉 Оплата подтверждена!\n\n👑 Тебе начислено " + result.days + " дн. Premium. Спасибо за поддержку!", mainKeyboard);
+    await show(chatId, "🎉 Оплата подтверждена!\n\n👑 Тебе начислено " + result.days + " дн. Premium. Спасибо за поддержку!", mainKeyboardFor(userId));
   } else if (result?.reason === "already_paid") {
-    await show(chatId, "✅ Этот платёж уже был обработан. Premium начислен.", mainKeyboard);
+    await show(chatId, "✅ Этот платёж уже был обработан. Premium начислен.", mainKeyboardFor(userId));
   } else {
-    await show(chatId, "⚠️ Не удалось начислить Premium автоматически. Не отправляй повторный платёж — обратись в поддержку.", mainKeyboard);
+    await show(chatId, "⚠️ Не удалось начислить Premium автоматически. Не отправляй повторный платёж — обратись в поддержку.", mainKeyboardFor(userId));
   }
 }
 
@@ -667,11 +685,48 @@ async function handleMessage(message: any) {
   if (text.startsWith("/start")) return await handleStart(message);
   const session = await getSession(userId);
   if (!session) {
-    await show(chatId, "Выбери режим в меню поиска, чтобы начать 👇", mainKeyboard);
+    await show(chatId, "Выбери режим в меню поиска, чтобы начать 👇", mainKeyboardFor(userId));
+    return;
+  }
+  if (session.state.startsWith("await_admin_") && userId !== BOT_OWNER_ID) {
+    await clearSession(userId);
+    await show(chatId, "⛔ Нет доступа.", mainKeyboardFor(userId));
     return;
   }
   try {
-    if (session.state === "await_trap_username") {
+    if (session.state === "await_admin_premium_user_id") {
+      const targetId = Number(text);
+      if (!/^\\d+$/.test(text) || !Number.isSafeInteger(targetId) || targetId <= 0) {
+        await show(chatId, "Введи корректный числовой ID профиля.", { inline_keyboard: [[{ text: "Отмена", callback_data: "admin:cancel" }], ...backMain] });
+        return;
+      }
+      const target = await db("profiles?select=telegram_id&telegram_id=eq." + targetId + "&limit=1");
+      if (!Array.isArray(target) || !target.length) {
+        await show(chatId, "Профиль с ID " + targetId + " не найден. Отправь другой ID.", { inline_keyboard: [[{ text: "Отмена", callback_data: "admin:cancel" }], ...backMain] });
+        return;
+      }
+      await setSession(userId, "await_admin_premium_minutes", { target_telegram_id: targetId });
+      await show(chatId, "⏱ На сколько минут выдать Premium профилю " + targetId + "?\\nВведи целое число от 1 до 525600 (до 1 года).", {
+        inline_keyboard: [[{ text: "Отмена", callback_data: "admin:cancel" }], ...backMain],
+      });
+      return;
+    }
+    else if (session.state === "await_admin_premium_minutes") {
+      const minutes = Number(text);
+      const targetId = Number(session.payload?.target_telegram_id);
+      if (!/^\\d+$/.test(text) || !Number.isSafeInteger(minutes) || minutes < 1 || minutes > 525600) {
+        await show(chatId, "Введи целое число минут от 1 до 525600.", { inline_keyboard: [[{ text: "Отмена", callback_data: "admin:cancel" }], ...backMain] });
+        return;
+      }
+      if (!Number.isSafeInteger(targetId) || targetId <= 0) throw new Error("Сессия выдачи Premium повреждена. Начни заново.");
+      const until = await grantPremiumMinutes(targetId, minutes);
+      await clearSession(userId);
+      await show(chatId, "✅ Premium выдан!\\n\\n🆔 ID профиля · " + targetId + "\\n⏱ Добавлено · " + minutes + " мин.\\n👑 Действует до · " + new Date(until).toLocaleString("ru-RU"), {
+        inline_keyboard: [[{ text: "Выдать ещё", callback_data: "admin:premium" }], ...backMain],
+      });
+      return;
+    }
+    else if (session.state === "await_trap_username") {
       await createTrapFromInput(userId, chatId, text);
     }
     else if (session.state === "await_premium_days") {
@@ -705,6 +760,24 @@ async function handleCallback(callback: any) {
   const userId = callback.from.id;
   if (!chatId || !messageId) return;
   await telegram("answerCallbackQuery", { callback_query_id: callback.id });
+
+  if (data === "admin:premium") {
+    if (userId !== BOT_OWNER_ID) {
+      await telegram("answerCallbackQuery", { callback_query_id: callback.id, text: "Нет доступа", show_alert: true });
+      return;
+    }
+    await setSession(userId, "await_admin_premium_user_id");
+    await editScreen(chatId, messageId, "🛠 Выдача Premium по ID\\n━━━━━━━━━━━━━━\\n\\nОтправь Telegram ID профиля, которому нужно выдать Premium.", {
+      inline_keyboard: [[{ text: "Отмена", callback_data: "admin:cancel" }], ...backMain],
+    });
+    return;
+  }
+  if (data === "admin:cancel") {
+    if (userId !== BOT_OWNER_ID) return;
+    await clearSession(userId);
+    await editScreen(chatId, messageId, "Выдача Premium отменена.", { inline_keyboard: [[{ text: "В меню", callback_data: "menu:home" }], ...backMain] });
+    return;
+  }
 
   if (data === "trap:add") {
     await setSession(userId, "await_trap_username");
@@ -799,7 +872,7 @@ async function handleCallback(callback: any) {
   let view: { text: string; reply_markup: unknown } | null = null;
   switch (data) {
     case "menu:home":
-      view = screen("Skebob Username — главное меню\n\nВыбери раздел 👇", mainKeyboard); break;
+      view = screen("Skebob Username — главное меню\n\nВыбери раздел 👇", mainKeyboardFor(userId)); break;
     case "menu:search":
       view = screen("🔍 ПОИСК ЮЗЕРНЕЙМОВ\n\nВыбери способ подбора:", searchKeyboard); break;
     case "mode:five":
@@ -861,7 +934,7 @@ async function handleCallback(callback: any) {
       await setSearchMode(userId, "random");
       await showSearchSettings(userId, chatId, messageId); return;
     default:
-      view = screen("Неизвестная команда. Вернись в меню.", mainKeyboard);
+      view = screen("Неизвестная команда. Вернись в меню.", mainKeyboardFor(userId));
   }
   if (view) await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: view.text, reply_markup: view.reply_markup });
 }

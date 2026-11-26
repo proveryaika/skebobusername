@@ -148,3 +148,43 @@ begin
 end; $$;
 revoke all on function public.credit_gram_payment(uuid, text) from public, anon, authenticated;
 grant execute on function public.credit_gram_payment(uuid, text) to service_role;
+
+
+-- Telegram Stars payments
+create table if not exists public.star_payments (
+ id uuid primary key default gen_random_uuid(),
+ telegram_id bigint not null references public.profiles(telegram_id) on delete cascade,
+ days integer not null check (days between 1 and 365),
+ stars integer not null check (stars > 0),
+ payload text not null unique,
+ status text not null default 'pending' check (status in ('pending','paid','expired')),
+ telegram_payment_charge_id text unique,
+ created_at timestamptz not null default now(),
+ paid_at timestamptz
+);
+create index if not exists star_payments_user_created_idx on public.star_payments(telegram_id, created_at desc);
+alter table public.star_payments enable row level security;
+revoke all on public.star_payments from anon, authenticated;
+grant select, insert, update on public.star_payments to service_role;
+
+create or replace function public.credit_star_payment(p_payload text, p_charge_id text)
+returns jsonb language plpgsql set search_path = '' as $$
+declare v_payment public.star_payments%rowtype;
+begin
+ select * into v_payment from public.star_payments where payload = p_payload for update;
+ if not found then return jsonb_build_object('credited', false, 'reason', 'payment_not_found'); end if;
+ if v_payment.status = 'paid' then return jsonb_build_object('credited', false, 'reason', 'already_paid'); end if;
+ if v_payment.status <> 'pending' then return jsonb_build_object('credited', false, 'reason', 'payment_not_pending'); end if;
+ if exists (select 1 from public.star_payments where telegram_payment_charge_id = p_charge_id and payload <> p_payload) then
+   return jsonb_build_object('credited', false, 'reason', 'charge_already_used');
+ end if;
+ update public.profiles
+ set premium_until = greatest(coalesce(premium_until, now()), now()) + make_interval(days => v_payment.days), updated_at = now()
+ where telegram_id = v_payment.telegram_id;
+ if not found then return jsonb_build_object('credited', false, 'reason', 'profile_not_found'); end if;
+ update public.star_payments set status = 'paid', telegram_payment_charge_id = p_charge_id, paid_at = now()
+ where id = v_payment.id;
+ return jsonb_build_object('credited', true, 'days', v_payment.days);
+end; $$;
+revoke all on function public.credit_star_payment(text, text) from public, anon, authenticated;
+grant execute on function public.credit_star_payment(text, text) to service_role;

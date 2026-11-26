@@ -70,9 +70,9 @@ async function setSearchMode(userId: number, mode: "readable" | "random") {
 }
 async function showSearchSettings(userId: number, chatId: number, messageId?: number) {
   const mode = await getSearchMode(userId), readable = mode === "readable";
-  const text = "⚙️ Настройки поиска\\n━━━━━━━━━━━━━━\\n\\n📋 Режим · " + (readable ? "Читабельный" : "Рандомный") +
-    "\\n\\n" + (readable ? "✅ Читабельный — ищет произносимые ники\\nРандомный — любые случайные комбинации" : "Читабельный — ищет произносимые ники\\n✅ Рандомный — любые случайные комбинации") +
-    "\\n\\n💡 Нажми на режим, чтобы переключить";
+  const text = "⚙️ Настройки поиска\n━━━━━━━━━━━━━━\n\n📋 Режим · " + (readable ? "Читабельный" : "Рандомный") +
+    "\n\n" + (readable ? "✅ Читабельный — ищет произносимые ники\nРандомный — любые случайные комбинации" : "Читабельный — ищет произносимые ники\n✅ Рандомный — любые случайные комбинации") +
+    "\n\n💡 Нажми на режим, чтобы переключить";
   const markup = { inline_keyboard: [
     [{ text: (readable ? "✅ " : "") + "Читабельный", callback_data: "settings:mode:readable" }],
     [{ text: (!readable ? "✅ " : "") + "Рандомный", callback_data: "settings:mode:random" }],
@@ -159,9 +159,9 @@ async function handleStart(message: any) {
       p_referrer_id: referredBy, p_referred_id: user.id,
     });
     if (reward?.credited === true) {
-      const bonusText = "🎉 По твоей ссылке пришёл новый пользователь!\\nТебе начислено +3 бонусных поисковых запроса. 💎";
+      const bonusText = "🎉 По твоей ссылке пришёл новый пользователь!\nТебе начислено +3 бонусных поисковых запроса. 💎";
       const premiumText = reward.premium_day === true
-        ? "\\n\\n👑 Поздравляем! За 5 приглашённых пользователей тебе начислен 1 день Премиума!"
+        ? "\n\n👑 Поздравляем! За 5 приглашённых пользователей тебе начислен 1 день Премиума!"
         : "";
       await show(referredBy, bonusText + premiumText, mainKeyboard);
     }
@@ -287,13 +287,13 @@ async function showPremium(userId: number, chatId: number, messageId: number) {
   const until = rows?.[0]?.premium_until;
   const active = until && new Date(until).getTime() > Date.now();
   const status = active ? "✅ Активен до " + new Date(until).toLocaleDateString("ru-RU") : "❌ Не активен";
-  const text = "⭐ Премиум\\n━━━━━━━━━━━━━━\\n\\n" +
-    "💡 Статус · " + status + "\\n\\n" +
-    "💎 Что даёт Премиум\\n" +
-    "▫️ Безлимит — без лимита 5/день\\n" +
-    "▫️ Без ожиданий — не ждёшь завтрашнего сброса\\n" +
-    "▫️ Любые режимы — слово и фильтр без остановки\\n\\n" +
-    "💰 Стоимость за 1 день\\n⭐ Звёзды · 25\\n💵 Криптовалюта · $0.35\\n\\n👇 Выбери способ оплаты";
+  const text = "⭐ Премиум\n━━━━━━━━━━━━━━\n\n" +
+    "💡 Статус · " + status + "\n\n" +
+    "💎 Что даёт Премиум\n" +
+    "▫️ Безлимит — без лимита 5/день\n" +
+    "▫️ Без ожиданий — не ждёшь завтрашнего сброса\n" +
+    "▫️ Любые режимы — слово и фильтр без остановки\n\n" +
+    "💰 Стоимость за 1 день\n⭐ Звёзды · 25\n💵 Криптовалюта · $0.35\n\n👇 Выбери способ оплаты";
   await editScreen(chatId, messageId, text, { inline_keyboard: [
     [{ text: "⭐ Звёзды", callback_data: "premium:stars" }, { text: "💵 Криптовалюта", callback_data: "premium:crypto" }],
     [{ text: "🎁 Подарить другу", callback_data: "premium:gift" }],
@@ -304,9 +304,9 @@ async function showPremium(userId: number, chatId: number, messageId: number) {
 
 async function showStars(userId: number, chatId: number, messageId: number) {
   await editScreen(chatId, messageId,
-    "⭐ ОПЛАТА ЗВЁЗДАМИ\\n━━━━━━━━━━━━━━\\n\\n" +
-    "⭐ 25 звёзд = 1 день Премиума\\n" +
-    "Чем больше звёзд — тем дольше срок.\\n\\n" +
+    "⭐ ОПЛАТА ЗВЁЗДАМИ\n━━━━━━━━━━━━━━\n\n" +
+    "⭐ 25 звёзд = 1 день Премиума\n" +
+    "Чем больше звёзд — тем дольше срок.\n\n" +
     "Выбери пакет:",
     { inline_keyboard: [
       [{ text: "25 ⭐ · 1 день", callback_data: "stars:plan:1" }, { text: "50 ⭐ · 2 дня", callback_data: "stars:plan:2" }],
@@ -319,9 +319,9 @@ async function showStars(userId: number, chatId: number, messageId: number) {
 
 async function showCrypto(userId: number, chatId: number, messageId: number) {
   await editScreen(chatId, messageId,
-    "💵 ОПЛАТА КРИПТОВАЛЮТОЙ\\n━━━━━━━━━━━━━━\\n\\n" +
-    "💵 $0.35 = 1 день Премиума\\n\\n" +
-    "1️⃣ Выбери срок\\n2️⃣ После подключения оплаты получишь счёт\\n3️⃣ Премиум включится после подтверждения платежа\\n\\nНа сколько дней?",
+    "💵 ОПЛАТА КРИПТОВАЛЮТОЙ\n━━━━━━━━━━━━━━\n\n" +
+    "💵 $0.35 = 1 день Премиума\n\n" +
+    "1️⃣ Выбери срок\n2️⃣ После подключения оплаты получишь счёт\n3️⃣ Премиум включится после подтверждения платежа\n\nНа сколько дней?",
     { inline_keyboard: [
       [{ text: "1 день · $0.35", callback_data: "crypto:plan:1" }, { text: "3 дня · $1.05", callback_data: "crypto:plan:3" }],
       [{ text: "7 дней · $2.45", callback_data: "crypto:plan:7" }, { text: "30 дней · $10.50", callback_data: "crypto:plan:30" }],
@@ -334,8 +334,8 @@ async function showCrypto(userId: number, chatId: number, messageId: number) {
 
 async function showPaymentPending(chatId: number, messageId: number, title: string, detail: string, back: string) {
   await editScreen(chatId, messageId,
-    title + "\\n━━━━━━━━━━━━━━\\n\\n" + detail +
-    "\\n\\n🔧 Экран и выбор тарифа готовы. Подключение реального приёма платежей сделаем следующим этапом. Сейчас оплата не списывается, Премиум не начисляется.",
+    title + "\n━━━━━━━━━━━━━━\n\n" + detail +
+    "\n\n🔧 Экран и выбор тарифа готовы. Подключение реального приёма платежей сделаем следующим этапом. Сейчас оплата не списывается, Премиум не начисляется.",
     { inline_keyboard: [
       [{ text: "⬅️ Назад", callback_data: back }],
       ...backMain,
@@ -345,10 +345,10 @@ async function showPaymentPending(chatId: number, messageId: number, title: stri
 
 async function showGift(userId: number, chatId: number, messageId: number) {
   await editScreen(chatId, messageId,
-    "🎁 ПОДАРИТЬ ПРЕМИУМ ДРУГУ\\n━━━━━━━━━━━━━━\\n\\n" +
-    "1️⃣ Выбери срок и способ оплаты\\n" +
-    "2️⃣ После оплаты получишь ссылку-подарок\\n" +
-    "3️⃣ Отправь её другу — он откроет бота и получит Премиум\\n\\n" +
+    "🎁 ПОДАРИТЬ ПРЕМИУМ ДРУГУ\n━━━━━━━━━━━━━━\n\n" +
+    "1️⃣ Выбери срок и способ оплаты\n" +
+    "2️⃣ После оплаты получишь ссылку-подарок\n" +
+    "3️⃣ Отправь её другу — он откроет бота и получит Премиум\n\n" +
     "🎁 Другу не нужно заранее знать бота. Если он новый пользователь, переход по ссылке также засчитается как приглашение.",
     { inline_keyboard: [
       [{ text: "3 дня · $1.05", callback_data: "gift:plan:3" }, { text: "7 дней · $2.45", callback_data: "gift:plan:7" }],
@@ -363,8 +363,8 @@ async function showGift(userId: number, chatId: number, messageId: number) {
 
 async function showGiftStars(chatId: number, messageId: number) {
   await editScreen(chatId, messageId,
-    "⭐ ПОДАРОК ЗВЁЗДАМИ\\n━━━━━━━━━━━━━━\\n\\n" +
-    "Выбери количество звёзд для подарка.\\n" +
+    "⭐ ПОДАРОК ЗВЁЗДАМИ\n━━━━━━━━━━━━━━\n\n" +
+    "Выбери количество звёзд для подарка.\n" +
     "25 ⭐ = 1 день Премиума. Подарок будет предназначен другу, а не твоему аккаунту.",
     { inline_keyboard: [
       [{ text: "25 ⭐ · 1 день", callback_data: "gift:stars:25" }, { text: "50 ⭐ · 2 дня", callback_data: "gift:stars:50" }],
@@ -377,7 +377,7 @@ async function showGiftStars(chatId: number, messageId: number) {
 
 async function showMyGifts(chatId: number, messageId: number) {
   await editScreen(chatId, messageId,
-    "🎁 МОИ ПОДАРКИ\\n━━━━━━━━━━━━━━\\n\\n" +
+    "🎁 МОИ ПОДАРКИ\n━━━━━━━━━━━━━━\n\n" +
     "Пока подарков нет. После подключения оплаты здесь будут отображаться созданные подарки, их статус и ссылки для отправки друзьям.",
     { inline_keyboard: [
       [{ text: "🎁 Создать подарок", callback_data: "premium:gift" }],
@@ -442,8 +442,8 @@ async function handleMessage(message: any) {
         });
         return;
       }
-      await show(chatId, "💵 Выбрано " + days + " дн. Премиума\\nСтоимость: $" + (0.35 * days).toFixed(2) +
-        "\\n\\nПодключение реальной оплаты будет следующим этапом. Сейчас деньги не списываются.",
+      await show(chatId, "💵 Выбрано " + days + " дн. Премиума\nСтоимость: $" + (0.35 * days).toFixed(2) +
+        "\n\nПодключение реальной оплаты будет следующим этапом. Сейчас деньги не списываются.",
         { inline_keyboard: [[{ text: "⬅️ К тарифам", callback_data: "premium:crypto" }], ...backMain] });
     }
     else if (session.state === "await_word") await runSearch(userId, chatId, "word", { query: text });
@@ -482,7 +482,7 @@ async function handleCallback(callback: any) {
   }
   if (data === "crypto:custom") {
     await setSession(userId, "await_premium_days", { kind: "crypto_custom_days" });
-    await editScreen(chatId, messageId, "✍️ Введи количество дней Премиума числом (от 1 до 365).\\n\\nПокажу стоимость. Оплата будет подключена следующим этапом.", {
+    await editScreen(chatId, messageId, "✍️ Введи количество дней Премиума числом (от 1 до 365).\n\nПокажу стоимость. Оплата будет подключена следующим этапом.", {
       inline_keyboard: [[{ text: "⬅️ Назад", callback_data: "premium:crypto" }], ...backMain],
     });
     return;

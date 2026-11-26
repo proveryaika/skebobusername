@@ -55,6 +55,33 @@ function randomTail(length: number, chars: string) {
 }
 function unique(items: string[]) { return [...new Set(items)]; }
 
+function generateReadable(length: number): string {
+  const consonants = "bcdfghjklmnpqrstvwxz", vowels = "aeiou";
+  let value = pick("abcdefghijklmnopqrstuvwxyz");
+  for (let i = 1; i < length; i++) value += pick(vowels.includes(value[value.length - 1]) ? consonants : vowels);
+  return value;
+}
+async function getSearchMode(userId: number): Promise<"readable" | "random"> {
+  const rows = await db("profiles?select=search_mode&telegram_id=eq." + userId + "&limit=1");
+  return rows?.[0]?.search_mode === "random" ? "random" : "readable";
+}
+async function setSearchMode(userId: number, mode: "readable" | "random") {
+  await db("profiles?telegram_id=eq." + userId, "PATCH", { search_mode: mode });
+}
+async function showSearchSettings(userId: number, chatId: number, messageId?: number) {
+  const mode = await getSearchMode(userId), readable = mode === "readable";
+  const text = "⚙️ Настройки поиска\\n━━━━━━━━━━━━━━\\n\\n📋 Режим · " + (readable ? "Читабельный" : "Рандомный") +
+    "\\n\\n" + (readable ? "✅ Читабельный — ищет произносимые ники\\nРандомный — любые случайные комбинации" : "Читабельный — ищет произносимые ники\\n✅ Рандомный — любые случайные комбинации") +
+    "\\n\\n💡 Нажми на режим, чтобы переключить";
+  const markup = { inline_keyboard: [
+    [{ text: (readable ? "✅ " : "") + "Читабельный", callback_data: "settings:mode:readable" }],
+    [{ text: (!readable ? "✅ " : "") + "Рандомный", callback_data: "settings:mode:random" }],
+    [{ text: "⬅️ В меню поиска", callback_data: "menu:search" }], ...backMain
+  ]};
+  if (messageId) await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text, reply_markup: markup });
+  else await show(chatId, text, markup);
+}
+
 function generateByLength(length: number, digits: boolean, count = 1): string[] {
   const letters = "abcdefghijklmnopqrstuvwxyz";
   const rest = digits ? letters + "0123456789" : letters;
@@ -133,11 +160,12 @@ async function handleStart(message: any) {
 
 async function runSearch(userId: number, chatId: number, mode: string, options: { digits?: boolean; query?: string } = {}) {
   let candidates: string[];
-  if (mode === "length_5") candidates = generateByLength(5, options.digits ?? false);
-  else if (mode === "length_6") candidates = generateByLength(6, options.digits ?? false);
+  const searchMode = await getSearchMode(userId);
+  if (mode === "length_5") candidates = searchMode === "readable" && !options.digits ? [generateReadable(5)] : generateByLength(5, options.digits ?? false);
+  else if (mode === "length_6") candidates = searchMode === "readable" && !options.digits ? [generateReadable(6)] : generateByLength(6, options.digits ?? false);
   else if (mode === "word") candidates = generateFromWord(options.query ?? "");
   else if (mode === "mask") candidates = generateFromMask(options.query ?? "");
-  else candidates = generateTrap();
+  else candidates = searchMode === "readable" ? [generateReadable(6)] : generateTrap();
 
   const quota = await db("rpc/consume_daily_search", "POST", {
     p_telegram_id: userId, p_mode: mode, p_include_digits: options.digits ?? null,
@@ -358,7 +386,13 @@ async function handleCallback(callback: any) {
     case "menu:referrals":
       await showReferrals(userId, chatId); return;
     case "menu:settings":
-      view = screen("⚙️ Настройки\n\nСейчас поиск использует стандартные настройки генерации.", { inline_keyboard: [[{ text: "Назад к поиску", callback_data: "menu:search" }], ...backMain]}); break;
+      await showSearchSettings(userId, chatId, messageId); return;
+    case "settings:mode:readable":
+      await setSearchMode(userId, "readable");
+      await showSearchSettings(userId, chatId, messageId); return;
+    case "settings:mode:random":
+      await setSearchMode(userId, "random");
+      await showSearchSettings(userId, chatId, messageId); return;
     default:
       view = screen("Неизвестная команда. Вернись в меню.", mainKeyboard);
   }

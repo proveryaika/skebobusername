@@ -7,11 +7,15 @@ const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 
 const mainKeyboard = {
   inline_keyboard: [
-    [{ text: "🔍 поиск", callback_data: "menu:search" }],
-    [{ text: "👤 профиль", callback_data: "menu:profile" }],
-    [{ text: "👥 реферальная программа", callback_data: "menu:referrals" }],
-    [{ text: "👑 премиум", callback_data: "menu:premium" }],
-    [{ text: "💬 поддержка", callback_data: "menu:support" }],
+    [{ text: "🔍 Поиск", callback_data: "menu:search" }],
+    [
+      { text: "👤 Профиль", callback_data: "menu:profile" },
+      { text: "👥 Рефералы", callback_data: "menu:referrals" },
+    ],
+    [
+      { text: "👑 Премиум", callback_data: "menu:premium" },
+      { text: "💬 Поддержка", callback_data: "menu:support" },
+    ],
   ],
 };
 const backMain = [[{ text: "главное меню", callback_data: "menu:home" }]];
@@ -100,6 +104,9 @@ async function handleCallback(callback: any) {
 
   if (!chatId || !messageId) return;
 
+  // These buttons are intentionally visible but inactive for now.
+  if (data === "menu:premium" || data === "menu:support") return;
+
   let view: { text: string; reply_markup: unknown };
 
   switch (data) {
@@ -121,17 +128,35 @@ async function handleCallback(callback: any) {
     case "format:five:letters": {
       const userId = callback.from.id;
       const includeDigits = data.endsWith("digits");
-      await db("search_history", "POST", {
-        telegram_id: userId,
-        mode: "length_5",
-        include_digits: includeDigits,
+      const quota = await db("rpc/consume_daily_search", "POST", {
+        p_telegram_id: userId,
+        p_mode: "length_5",
+        p_include_digits: includeDigits,
       });
-      view = screen(`✅ Формат выбран: ${includeDigits ? "с цифрами" : "без цифр"}\n\nНастройки сохранены. Модуль подбора и проверки доступности юзернеймов подключим следующим этапом.`, {
-        inline_keyboard: [
-          [{ text: "к режимам поиска", callback_data: "menu:search" }],
-          ...backMain,
-        ],
-      });
+      if (!quota?.allowed) {
+        view = screen(
+          "⛔ Дневной лимит исчерпан.\\n\\nБесплатно доступно 5 поисковых запросов в сутки. Попробуй снова после ежедневного сброса лимита.",
+          {
+            inline_keyboard: [
+              [{ text: "к режимам поиска", callback_data: "menu:search" }],
+              ...backMain,
+            ],
+          },
+        );
+      } else {
+        const quotaLine = quota.premium
+          ? "👑 Премиум: без дневного лимита."
+          : `🎟 Осталось бесплатных запросов сегодня: ${quota.remaining} из 5.`;
+        view = screen(
+          `✅ Запрос принят: ${includeDigits ? "с цифрами" : "без цифр"}\\n\\n${quotaLine}\\n\\nМодуль подбора и проверки доступности юзернеймов подключим следующим этапом.`,
+          {
+            inline_keyboard: [
+              [{ text: "к режимам поиска", callback_data: "menu:search" }],
+              ...backMain,
+            ],
+          },
+        );
+      }
       break;
     }
     case "mode:six":

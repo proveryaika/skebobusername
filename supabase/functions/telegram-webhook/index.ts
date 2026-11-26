@@ -599,6 +599,66 @@ async function showReferrals(userId: number, chatId: number) {
   );
 }
 
+
+async function showTrapMenu(chatId: number, messageId?: number) {
+  const text = "🎯 Ловушка\n━━━━━━━━━━━━━━\n\n💡 Понравился ник, но он занят?\nПоставь ловушку — я сохраню его и покажу в твоём списке.\n\n⏳ До 3 активных ловушек · срок 7 дней";
+  const markup = { inline_keyboard: [
+    [{ text: "🎯 Поставить ловушку", callback_data: "trap:add" }],
+    [{ text: "📋 Мои ловушки", callback_data: "trap:list" }],
+    [{ text: "⬅️ В меню поиска", callback_data: "menu:search" }],
+    ...backMain,
+  ]};
+  if (messageId) await editScreen(chatId, messageId, text, markup);
+  else await show(chatId, text, markup);
+}
+
+async function showMyTraps(userId: number, chatId: number) {
+  await db("username_traps?status=eq.waiting&expires_at=lte." + encodeURIComponent(new Date().toISOString()) + "&telegram_id=eq." + userId, "PATCH", { status: "expired" });
+  const rows = await db("username_traps?select=id,username,created_at,expires_at,status&telegram_id=eq." + userId + "&status=eq.waiting&expires_at=gt." + encodeURIComponent(new Date().toISOString()) + "&order=created_at.desc&limit=3");
+  const traps = Array.isArray(rows) ? rows : [];
+  if (!traps.length) {
+    await show(chatId, "🎯 Мои ловушки\n━━━━━━━━━━━━━━\n\nℹ️ Пока пусто. Поставь первую ловушку на занятый ник.", {
+      inline_keyboard: [[{ text: "🎯 Поставить ловушку", callback_data: "trap:add" }], [{ text: "⬅️ Назад", callback_data: "mode:trap" }], ...backMain],
+    });
+    return;
+  }
+  const lines = traps.map((t: any) => "🟢 @" + t.username + " · ждёт");
+  const buttons = traps.map((t: any) => [{ text: "✖️ Удалить @" + t.username, callback_data: "trap:delete:" + t.id }]);
+  await show(chatId, "🎯 Мои ловушки\n━━━━━━━━━━━━━━\n\n" + lines.join("\n") +
+    "\n\n⏳ Ловушка действует 7 дней с момента создания.", {
+    inline_keyboard: [...buttons, [{ text: "🎯 Поставить ещё", callback_data: "trap:add" }], [{ text: "⬅️ Назад", callback_data: "mode:trap" }], ...backMain],
+  });
+}
+
+async function createTrapFromInput(userId: number, chatId: number, raw: string) {
+  const username = raw.trim().replace(/^@/, "").toLowerCase();
+  if (!/^[a-z][a-z0-9_]{4,31}$/.test(username)) {
+    await show(chatId, "⚠️ Неверный формат. Введи ник от 5 до 32 символов: английские буквы, цифры и _. Ник должен начинаться с буквы.", {
+      inline_keyboard: [[{ text: "Отмена", callback_data: "mode:trap" }], ...backMain],
+    });
+    return;
+  }
+  const result = await db("rpc/create_username_trap", "POST", { p_telegram_id: userId, p_username: username });
+  await clearSession(userId);
+  if (result?.ok) {
+    await show(chatId, "🎯 Ловушка поставлена!\n━━━━━━━━━━━━━━\n\n🟢 @" + username + " · ждёт\n⏳ Срок · 7 дней\n\nПосмотреть список можно в разделе «Мои ловушки».", {
+      inline_keyboard: [[{ text: "📋 Мои ловушки", callback_data: "trap:list" }], [{ text: "🎯 Поставить ещё", callback_data: "trap:add" }], ...backMain],
+    });
+  } else if (result?.reason === "limit") {
+    await show(chatId, "⛔ Уже есть 3 активные ловушки. Удали одну из списка или дождись окончания срока.", {
+      inline_keyboard: [[{ text: "📋 Мои ловушки", callback_data: "trap:list" }], ...backMain],
+    });
+  } else if (result?.reason === "duplicate") {
+    await show(chatId, "ℹ️ Ловушка на @" + username + " уже активна.", {
+      inline_keyboard: [[{ text: "📋 Мои ловушки", callback_data: "trap:list" }], ...backMain],
+    });
+  } else {
+    await show(chatId, "⚠️ Не удалось поставить ловушку. Проверь ник и попробуй ещё раз.", {
+      inline_keyboard: [[{ text: "🎯 Повторить", callback_data: "trap:add" }], ...backMain],
+    });
+  }
+}
+
 async function handleMessage(message: any) {
   const userId = message.from.id;
   const chatId = message.chat.id;
@@ -611,7 +671,10 @@ async function handleMessage(message: any) {
     return;
   }
   try {
-    if (session.state === "await_premium_days") {
+    if (session.state === "await_trap_username") {
+      await createTrapFromInput(userId, chatId, text);
+    }
+    else if (session.state === "await_premium_days") {
       const days = Number(text);
       await clearSession(userId);
       if (!Number.isInteger(days) || days < 1 || days > 365) {
@@ -639,6 +702,20 @@ async function handleCallback(callback: any) {
   if (!chatId || !messageId) return;
   await telegram("answerCallbackQuery", { callback_query_id: callback.id });
 
+  if (data === "trap:add") {
+    await setSession(userId, "await_trap_username");
+    await editScreen(chatId, messageId, "📝 Какой ник ловим?\n━━━━━━━━━━━━━━\n\n✍️ Отправь юзернейм с @ или без — только английские буквы, цифры и _.", {
+      inline_keyboard: [[{ text: "Отмена", callback_data: "mode:trap" }], ...backMain],
+    });
+    return;
+  }
+  if (data === "trap:list") { await showMyTraps(userId, chatId); return; }
+  if (data.startsWith("trap:delete:")) {
+    const trapId = data.slice("trap:delete:".length);
+    await db("username_traps?id=eq." + encodeURIComponent(trapId) + "&telegram_id=eq." + userId, "PATCH", { status: "cancelled" });
+    await showMyTraps(userId, chatId);
+    return;
+  }
   if (data === "menu:support") {
     await editScreen(chatId, messageId,
       "💬 ПОДДЕРЖКА\n━━━━━━━━━━━━━━\n\nЕсли возник вопрос или нужна помощь — напиши напрямую:",
@@ -746,8 +823,7 @@ async function handleCallback(callback: any) {
       await setSession(userId, "await_mask");
       view = screen("🎭 Отправь маску длиной от 5 до 32 символов. Символ ? означает любую букву или цифру.\nПример: ab??_ или ?cool7", { inline_keyboard: [[{ text: "Отмена", callback_data: "menu:search" }], ...backMain]}); break;
     case "mode:trap":
-      await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text: "⏳ Подбираю необычные варианты..." });
-      return await runSearch(userId, chatId, "trap");
+      await showTrapMenu(chatId, messageId); return;
     case "search:again:length_5:1":
     case "search:again:length_5:0":
       return await runSearch(userId, chatId, "length_5", { digits: data.endsWith(":1") });

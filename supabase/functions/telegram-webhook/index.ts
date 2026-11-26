@@ -167,12 +167,12 @@ async function runSearch(userId: number, chatId: number, mode: string, options: 
   const remaining = quota.premium ? "👑 Премиум · без дневного лимита" : "🎟 Осталось запросов сегодня · " + quota.remaining + " из 5";
   const againCallback = mode === "word" ? "search:again:word:0" : mode === "mask" ? "search:again:mask:0" : "search:again:" + mode + ":" + (options.digits ? "1" : "0");
   await show(chatId,
-    "✅ Юзернейм подобран\\n━━━━━━━━━━━━━━\\n\\n" +
-    "Кликабельно: @" + username + "\\n\\n" +
-    "📏 Длина · " + username.length + " симв.\\n" +
-    "⭐ Оценка алгоритма · " + score + "/10\\n" + scoreBar + "\\n" +
-    "💵 Цена · нет подтверждённой рыночной оценки\\n\\n" +
-    "⚠️ Доступность имени не проверена. Открой ссылку, чтобы проверить его в Telegram. Оценка — условная характеристика имени, не стоимость продажи.\\n\\n" +
+    "✅ Юзернейм подобран\n━━━━━━━━━━━━━━\n\n" +
+    "Кликабельно: @" + username + "\n\n" +
+    "📏 Длина · " + username.length + " симв.\n" +
+    "⭐ Оценка алгоритма · " + score + "/10\n" + scoreBar + "\n" +
+    "💵 Цена · нет подтверждённой рыночной оценки\n\n" +
+    "⚠️ Доступность имени не проверена. Открой ссылку, чтобы проверить его в Telegram. Оценка — условная характеристика имени, не стоимость продажи.\n\n" +
     remaining,
     { inline_keyboard: [
       [{ text: "@" + username, url: "https://t.me/" + username }, { text: "⭐ В избранное", callback_data: "fav:add:" + username }],
@@ -296,7 +296,7 @@ async function handleCallback(callback: any) {
     const rows = await db("profiles?select=referral_code&telegram_id=eq." + userId + "&limit=1");
     const code = rows?.[0]?.referral_code;
     const link = code ? "https://t.me/usernamehunt1_bot?start=" + code : "Ссылка пока недоступна";
-    await show(chatId, "Твоя реферальная ссылка:\\n" + link, {
+    await show(chatId, "Твоя реферальная ссылка:\n" + link, {
       inline_keyboard: code ? [[{ text: "Открыть бота", url: link }], ...backMain] : backMain,
     });
     return;

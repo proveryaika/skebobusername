@@ -242,7 +242,7 @@ async function profileScreen(userId: number, chatId: number) {
     "Имя: " + name + (p.telegram_username ? " (@" + p.telegram_username + ")" : "") + "\n" +
     "Telegram ID: " + userId + "\n" +
     "Дата регистрации: " + (p.created_at ? new Date(p.created_at).toLocaleDateString("ru-RU") : "—") + "\n\n" +
-    "📊 СТАТИСТИКА\nВсего запросов: " + h.length + "\nСегодня: " + todayCount + " / " + (premium ? "∞" : "5") + "\nБонусных запросов: " + Number(p.bonus_searches ?? 0) + "\nИзбранное: " + favCount + "\nПриглашено друзей: " + refCount + "\n\n" +
+    "📊 СТАТИСТИКА\nВсего запросов: " + h.length + "\nСегодня: " + todayCount + " / " + (premium ? "∞" : String(5 + Number(p.bonus_searches ?? 0))) + "\nБонусных запросов: " + Number(p.bonus_searches ?? 0) + "\nБонусных запросов: " + Number(p.bonus_searches ?? 0) + "\nИзбранное: " + favCount + "\nПриглашено друзей: " + refCount + "\n\n" +
     "👑 Премиум: " + premiumText + "\n" +
     "🎟 Реферальный код: " + (p.referral_code ?? "—");
   await show(chatId, text, { inline_keyboard: [

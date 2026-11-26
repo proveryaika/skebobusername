@@ -278,30 +278,113 @@ async function showFavorites(userId: number, chatId: number) {
   });
 }
 
+async function editScreen(chatId: number, messageId: number, text: string, reply_markup: unknown) {
+  await telegram("editMessageText", { chat_id: chatId, message_id: messageId, text, reply_markup });
+}
+
 async function showPremium(userId: number, chatId: number, messageId: number) {
   const rows = await db("profiles?select=premium_until&telegram_id=eq." + userId + "&limit=1");
   const until = rows?.[0]?.premium_until;
   const active = until && new Date(until).getTime() > Date.now();
   const status = active ? "✅ Активен до " + new Date(until).toLocaleDateString("ru-RU") : "❌ Не активен";
-  const text = "⭐ Премиум\n━━━━━━━━━━━━━━\n\n" +
-    "💡 Статус · " + status + "\n\n" +
-    "💎 Что даёт Премиум\n\n" +
-    "▫️ Безлимит — без лимита 5/день\n" +
-    "▫️ Без ожиданий — не ждёшь завтрашнего сброса\n" +
-    "▫️ Любые режимы — слово и фильтр без остановки\n\n" +
-    "💰 Стоимость за 1 день\n" +
-    "⭐ Звёзды · 25\n" +
-    "💵 Криптовалюта · $0.35\n\n" +
-    "👇 Выбери способ оплаты";
-  await telegram("editMessageText", {
-    chat_id: chatId, message_id: messageId, text,
-    reply_markup: { inline_keyboard: [
-      [{ text: "⭐ Звёзды · 25", callback_data: "premium:stars" }, { text: "💵 Криптовалюта · $0.35", callback_data: "premium:crypto" }],
-      [{ text: "🎁 Подарить другу", callback_data: "premium:gift" }],
-      [{ text: "🆓 Получить бесплатно", callback_data: "premium:free" }],
+  const text = "⭐ Премиум\\n━━━━━━━━━━━━━━\\n\\n" +
+    "💡 Статус · " + status + "\\n\\n" +
+    "💎 Что даёт Премиум\\n" +
+    "▫️ Безлимит — без лимита 5/день\\n" +
+    "▫️ Без ожиданий — не ждёшь завтрашнего сброса\\n" +
+    "▫️ Любые режимы — слово и фильтр без остановки\\n\\n" +
+    "💰 Стоимость за 1 день\\n⭐ Звёзды · 25\\n💵 Криптовалюта · $0.35\\n\\n👇 Выбери способ оплаты";
+  await editScreen(chatId, messageId, text, { inline_keyboard: [
+    [{ text: "⭐ Звёзды", callback_data: "premium:stars" }, { text: "💵 Криптовалюта", callback_data: "premium:crypto" }],
+    [{ text: "🎁 Подарить другу", callback_data: "premium:gift" }],
+    [{ text: "🆓 Получить бесплатно", callback_data: "premium:free" }],
+    ...backMain,
+  ]});
+}
+
+async function showStars(userId: number, chatId: number, messageId: number) {
+  await editScreen(chatId, messageId,
+    "⭐ ОПЛАТА ЗВЁЗДАМИ\\n━━━━━━━━━━━━━━\\n\\n" +
+    "⭐ 25 звёзд = 1 день Премиума\\n" +
+    "Чем больше звёзд — тем дольше срок.\\n\\n" +
+    "Выбери пакет:",
+    { inline_keyboard: [
+      [{ text: "25 ⭐ · 1 день", callback_data: "stars:plan:1" }, { text: "50 ⭐ · 2 дня", callback_data: "stars:plan:2" }],
+      [{ text: "100 ⭐ · 4 дня", callback_data: "stars:plan:4" }],
+      [{ text: "⬅️ Назад", callback_data: "menu:premium" }],
       ...backMain,
-    ]},
-  });
+    ]}
+  );
+}
+
+async function showCrypto(userId: number, chatId: number, messageId: number) {
+  await editScreen(chatId, messageId,
+    "💵 ОПЛАТА КРИПТОВАЛЮТОЙ\\n━━━━━━━━━━━━━━\\n\\n" +
+    "💵 $0.35 = 1 день Премиума\\n\\n" +
+    "1️⃣ Выбери срок\\n2️⃣ После подключения оплаты получишь счёт\\n3️⃣ Премиум включится после подтверждения платежа\\n\\nНа сколько дней?",
+    { inline_keyboard: [
+      [{ text: "1 день · $0.35", callback_data: "crypto:plan:1" }, { text: "3 дня · $1.05", callback_data: "crypto:plan:3" }],
+      [{ text: "7 дней · $2.45", callback_data: "crypto:plan:7" }, { text: "30 дней · $10.50", callback_data: "crypto:plan:30" }],
+      [{ text: "✍️ Своё число дней", callback_data: "crypto:custom" }],
+      [{ text: "⬅️ Назад", callback_data: "menu:premium" }],
+      ...backMain,
+    ]}
+  );
+}
+
+async function showPaymentPending(chatId: number, messageId: number, title: string, detail: string, back: string) {
+  await editScreen(chatId, messageId,
+    title + "\\n━━━━━━━━━━━━━━\\n\\n" + detail +
+    "\\n\\n🔧 Экран и выбор тарифа готовы. Подключение реального приёма платежей сделаем следующим этапом. Сейчас оплата не списывается, Премиум не начисляется.",
+    { inline_keyboard: [
+      [{ text: "⬅️ Назад", callback_data: back }],
+      ...backMain,
+    ]}
+  );
+}
+
+async function showGift(userId: number, chatId: number, messageId: number) {
+  await editScreen(chatId, messageId,
+    "🎁 ПОДАРИТЬ ПРЕМИУМ ДРУГУ\\n━━━━━━━━━━━━━━\\n\\n" +
+    "1️⃣ Выбери срок и способ оплаты\\n" +
+    "2️⃣ После оплаты получишь ссылку-подарок\\n" +
+    "3️⃣ Отправь её другу — он откроет бота и получит Премиум\\n\\n" +
+    "🎁 Другу не нужно заранее знать бота. Если он новый пользователь, переход по ссылке также засчитается как приглашение.",
+    { inline_keyboard: [
+      [{ text: "3 дня · $1.05", callback_data: "gift:plan:3" }, { text: "7 дней · $2.45", callback_data: "gift:plan:7" }],
+      [{ text: "30 дней · $10.50", callback_data: "gift:plan:30" }],
+      [{ text: "⭐ Оплатить звёздами", callback_data: "gift:stars" }],
+      [{ text: "🎁 Мои подарки", callback_data: "gift:list" }],
+      [{ text: "⬅️ Назад", callback_data: "menu:premium" }],
+      ...backMain,
+    ]}
+  );
+}
+
+async function showGiftStars(chatId: number, messageId: number) {
+  await editScreen(chatId, messageId,
+    "⭐ ПОДАРОК ЗВЁЗДАМИ\\n━━━━━━━━━━━━━━\\n\\n" +
+    "Выбери количество звёзд для подарка.\\n" +
+    "25 ⭐ = 1 день Премиума. Подарок будет предназначен другу, а не твоему аккаунту.",
+    { inline_keyboard: [
+      [{ text: "25 ⭐ · 1 день", callback_data: "gift:stars:25" }, { text: "50 ⭐ · 2 дня", callback_data: "gift:stars:50" }],
+      [{ text: "100 ⭐ · 4 дня", callback_data: "gift:stars:100" }],
+      [{ text: "⬅️ Назад", callback_data: "premium:gift" }],
+      ...backMain,
+    ]}
+  );
+}
+
+async function showMyGifts(chatId: number, messageId: number) {
+  await editScreen(chatId, messageId,
+    "🎁 МОИ ПОДАРКИ\\n━━━━━━━━━━━━━━\\n\\n" +
+    "Пока подарков нет. После подключения оплаты здесь будут отображаться созданные подарки, их статус и ссылки для отправки друзьям.",
+    { inline_keyboard: [
+      [{ text: "🎁 Создать подарок", callback_data: "premium:gift" }],
+      [{ text: "⬅️ Назад", callback_data: "premium:gift" }],
+      ...backMain,
+    ]}
+  );
 }
 
 async function showReferrals(userId: number, chatId: number) {
@@ -350,7 +433,20 @@ async function handleMessage(message: any) {
     return;
   }
   try {
-    if (session.state === "await_word") await runSearch(userId, chatId, "word", { query: text });
+    if (session.state === "await_premium_days") {
+      const days = Number(text);
+      await clearSession(userId);
+      if (!Number.isInteger(days) || days < 1 || days > 365) {
+        await show(chatId, "Введи целое число от 1 до 365.", {
+          inline_keyboard: [[{ text: "⬅️ К тарифам", callback_data: "premium:crypto" }], ...backMain],
+        });
+        return;
+      }
+      await show(chatId, "💵 Выбрано " + days + " дн. Премиума\\nСтоимость: $" + (0.35 * days).toFixed(2) +
+        "\\n\\nПодключение реальной оплаты будет следующим этапом. Сейчас деньги не списываются.",
+        { inline_keyboard: [[{ text: "⬅️ К тарифам", callback_data: "premium:crypto" }], ...backMain] });
+    }
+    else if (session.state === "await_word") await runSearch(userId, chatId, "word", { query: text });
     else if (session.state === "await_mask") await runSearch(userId, chatId, "mask", { query: text });
   } catch (error) {
     await show(chatId, (error as Error).message + "\n\nПопробуй ещё раз или вернись в меню.", {
@@ -368,14 +464,37 @@ async function handleCallback(callback: any) {
   await telegram("answerCallbackQuery", { callback_query_id: callback.id });
 
   if (data === "menu:support") return;
-  if (data === "premium:stars" || data === "premium:crypto" || data === "premium:gift") {
-    await show(chatId, "Эта возможность скоро появится. Пока можно получить Премиум бесплатно за приглашения 👇", {
-      inline_keyboard: [[{ text: "🆓 Получить бесплатно", callback_data: "premium:free" }], ...backMain],
+  if (data === "premium:stars") { await showStars(userId, chatId, messageId); return; }
+  if (data === "premium:crypto") { await showCrypto(userId, chatId, messageId); return; }
+  if (data === "premium:gift") { await showGift(userId, chatId, messageId); return; }
+  if (data === "premium:free") { await showReferrals(userId, chatId); return; }
+  if (data === "gift:stars") { await showGiftStars(chatId, messageId); return; }
+  if (data === "gift:list") { await showMyGifts(chatId, messageId); return; }
+  if (data.startsWith("stars:plan:")) {
+    const days = Number(data.split(":")[2]);
+    if ([1,2,4].includes(days)) await showPaymentPending(chatId, messageId, "⭐ Пакет выбран", days + " дн. Премиума · " + (25 * days) + " ⭐", "premium:stars");
+    return;
+  }
+  if (data.startsWith("crypto:plan:")) {
+    const days = Number(data.split(":")[2]);
+    if ([1,3,7,30].includes(days)) await showPaymentPending(chatId, messageId, "💵 Тариф выбран", days + " дн. Премиума · $" + (0.35 * days).toFixed(2), "premium:crypto");
+    return;
+  }
+  if (data === "crypto:custom") {
+    await setSession(userId, "await_premium_days", { kind: "crypto_custom_days" });
+    await editScreen(chatId, messageId, "✍️ Введи количество дней Премиума числом (от 1 до 365).\\n\\nПокажу стоимость. Оплата будет подключена следующим этапом.", {
+      inline_keyboard: [[{ text: "⬅️ Назад", callback_data: "premium:crypto" }], ...backMain],
     });
     return;
   }
-  if (data === "premium:free") {
-    await showReferrals(userId, chatId);
+  if (data.startsWith("gift:plan:")) {
+    const days = Number(data.split(":")[2]);
+    if ([3,7,30].includes(days)) await showPaymentPending(chatId, messageId, "🎁 Подарок выбран", days + " дн. Премиума · $" + (0.35 * days).toFixed(2), "premium:gift");
+    return;
+  }
+  if (data.startsWith("gift:stars:")) {
+    const stars = Number(data.split(":")[2]);
+    if ([25,50,100].includes(stars)) await showPaymentPending(chatId, messageId, "🎁 Подарок звёздами выбран", stars + " ⭐ · " + (stars/25) + " дн. Премиума", "gift:stars");
     return;
   }
   if (data.startsWith("fav:add:")) {

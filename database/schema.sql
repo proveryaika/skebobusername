@@ -188,3 +188,41 @@ begin
 end; $$;
 revoke all on function public.credit_star_payment(text, text) from public, anon, authenticated;
 grant execute on function public.credit_star_payment(text, text) to service_role;
+
+ 
+-- Username traps (up to 3 active per Telegram user, 7-day lifetime)
+create table if not exists public.username_traps (
+ id uuid primary key default gen_random_uuid(),
+ telegram_id bigint not null references public.profiles(telegram_id) on delete cascade,
+ username text not null check (username ~ '^[a-z][a-z0-9_]{4,31}$'),
+ status text not null default 'waiting' check (status in ('waiting','released','expired','cancelled')),
+ created_at timestamptz not null default now(),
+ expires_at timestamptz not null default (now() + interval '7 days'),
+ unique (telegram_id, username)
+);
+create index if not exists username_traps_user_active_idx
+ on public.username_traps (telegram_id, expires_at desc) where status = 'waiting';
+alter table public.username_traps enable row level security;
+revoke all on public.username_traps from anon, authenticated;
+grant all on public.username_traps to service_role;
+
+create or replace function public.create_username_trap(p_telegram_id bigint, p_username text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare v_count integer; v_row public.username_traps;
+begin
+ if p_username !~ '^[a-z][a-z0-9_]{4,31}$' then return jsonb_build_object('ok', false, 'reason', 'invalid'); end if;
+ perform 1 from public.profiles where telegram_id = p_telegram_id for update;
+ update public.username_traps set status = 'expired'
+  where telegram_id = p_telegram_id and status = 'waiting' and expires_at <= now();
+ select count(*) into v_count from public.username_traps
+  where telegram_id = p_telegram_id and status = 'waiting' and expires_at > now();
+ if v_count >= 3 then return jsonb_build_object('ok', false, 'reason', 'limit'); end if;
+ if exists (select 1 from public.username_traps where telegram_id = p_telegram_id and username = p_username and status = 'waiting' and expires_at > now()) then
+  return jsonb_build_object('ok', false, 'reason', 'duplicate');
+ end if;
+ insert into public.username_traps (telegram_id, username) values (p_telegram_id, p_username) returning * into v_row;
+ return jsonb_build_object('ok', true, 'id', v_row.id, 'username', v_row.username, 'expires_at', v_row.expires_at);
+end;
+$$;
+revoke all on function public.create_username_trap(bigint,text) from public, anon, authenticated;
+grant execute on function public.create_username_trap(bigint,text) to service_role;

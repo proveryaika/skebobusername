@@ -323,6 +323,65 @@ async function showStars(userId: number, chatId: number, messageId: number) {
   );
 }
 
+async function createStarsInvoice(userId: number, chatId: number, days: number) {
+  if (!Number.isInteger(days) || days < 1 || days > 365) throw new Error("Некорректный срок Premium.");
+  const stars = days * 25;
+  const payload = "skb-stars-" + crypto.randomUUID();
+  await db("star_payments", "POST", {
+    telegram_id: userId, days, stars, payload, status: "pending",
+  });
+  await telegram("sendInvoice", {
+    chat_id: chatId,
+    title: "Skebob Username · Premium",
+    description: days + " дн. Premium без дневного лимита",
+    payload,
+    currency: "XTR",
+    prices: [{ label: "Premium · " + days + " дн.", amount: stars }],
+  });
+}
+
+async function handlePreCheckout(query: any) {
+  const payload = String(query.invoice_payload ?? "");
+  const rows = await db("star_payments?select=telegram_id,stars,status&payload=eq." + encodeURIComponent(payload) + "&limit=1");
+  const payment = rows?.[0];
+  const valid = payment &&
+    Number(payment.telegram_id) === Number(query.from?.id) &&
+    Number(payment.stars) === Number(query.total_amount) &&
+    query.currency === "XTR" &&
+    payment.status === "pending";
+  await telegram("answerPreCheckoutQuery", {
+    pre_checkout_query_id: query.id,
+    ok: Boolean(valid),
+    ...(!valid ? { error_message: "Счёт не найден или устарел. Вернись в Premium и создай новый." } : {}),
+  });
+}
+
+async function handleSuccessfulStarsPayment(message: any) {
+  const payment = message.successful_payment;
+  if (!payment || payment.currency !== "XTR") return;
+  const payload = String(payment.invoice_payload ?? "");
+  const rows = await db("star_payments?select=telegram_id,stars,days,status&payload=eq." + encodeURIComponent(payload) + "&limit=1");
+  const order = rows?.[0];
+  if (!order || Number(order.telegram_id) !== Number(message.from?.id) ||
+      Number(order.stars) !== Number(payment.total_amount)) {
+    console.error("Unmatched Telegram Stars payment", { payload, userId: message.from?.id, amount: payment.total_amount });
+    await show(message.chat.id, "⚠️ Платёж получен, но заказ не удалось сопоставить автоматически. Не оплачивай повторно — напиши в поддержку.", mainKeyboard);
+    return;
+  }
+  const result = await db("rpc/credit_star_payment", "POST", {
+    p_payload: payload,
+    p_charge_id: payment.telegram_payment_charge_id,
+  });
+  if (result?.credited) {
+    await show(message.chat.id, "🎉 Оплата получена!\n\n⭐ Списано · " + payment.total_amount + " Stars\n👑 Начислено · " + result.days + " дн. Premium\n\nСпасибо за поддержку!", mainKeyboard);
+  } else if (result?.reason === "already_paid") {
+    await show(message.chat.id, "✅ Этот платёж уже обработан. Premium активен.", mainKeyboard);
+  } else {
+    await show(message.chat.id, "⚠️ Telegram подтвердил оплату, но Premium не начислен автоматически. Не оплачивай повторно — напиши в поддержку.", mainKeyboard);
+    console.error("Stars credit failed", result);
+  }
+}
+
 async function showCrypto(userId: number, chatId: number, messageId: number) {
   await editScreen(chatId, messageId,
     "💵 ОПЛАТА КРИПТОВАЛЮТОЙ\n━━━━━━━━━━━━━━\n\n" +
@@ -538,6 +597,7 @@ async function handleMessage(message: any) {
   const userId = message.from.id;
   const chatId = message.chat.id;
   const text = String(message.text ?? "").trim();
+  if (message.successful_payment) return await handleSuccessfulStarsPayment(message);
   if (text.startsWith("/start")) return await handleStart(message);
   const session = await getSession(userId);
   if (!session) {
@@ -582,7 +642,7 @@ async function handleCallback(callback: any) {
   if (data === "gift:list") { await showMyGifts(chatId, messageId); return; }
   if (data.startsWith("stars:plan:")) {
     const days = Number(data.split(":")[2]);
-    if ([1,2,4].includes(days)) await showPaymentPending(chatId, messageId, "⭐ Пакет выбран", days + " дн. Премиума · " + (25 * days) + " ⭐", "premium:stars");
+    if ([1,2,4].includes(days)) await createStarsInvoice(userId, chatId, days);
     return;
   }
   if (data.startsWith("crypto:plan:")) {
@@ -721,7 +781,7 @@ Deno.serve(async (req: Request) => {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({
         url: SUPABASE_URL + "/functions/v1/telegram-webhook", secret_token: WEBHOOK_SECRET,
-        allowed_updates: ["message", "callback_query"], drop_pending_updates: false,
+        allowed_updates: ["message", "callback_query", "pre_checkout_query"], drop_pending_updates: false,
       }),
     });
     const result = await response.json();
@@ -730,7 +790,8 @@ Deno.serve(async (req: Request) => {
 
   try {
     const update = await req.json();
-    if (update.message) await handleMessage(update.message);
+    if (update.pre_checkout_query) await handlePreCheckout(update.pre_checkout_query);
+    else if (update.message) await handleMessage(update.message);
     else if (update.callback_query) await handleCallback(update.callback_query);
     return Response.json({ ok: true });
   } catch (error) {

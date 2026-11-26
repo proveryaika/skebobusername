@@ -471,8 +471,9 @@ async function checkGramPayment(userId: number, paymentId: string, chatId: numbe
     const decoded = msg?.message_content?.decoded;
     const comment = decoded?.comment ?? decoded?.text ?? msg?.decoded_comment ?? "";
     const value = BigInt(String(msg?.value ?? "0"));
-    return value === expectedNano && String(comment) === expectedComment &&
-      tx?.description?.aborted !== true && tx?.description?.compute_ph?.success !== false;
+    return String(msg?.destination ?? "") === String(tx?.account ?? "") &&
+      value === expectedNano && String(comment) === expectedComment &&
+      tx?.description?.aborted === false && tx?.description?.compute_ph?.success === true;
   });
   if (!found) {
     await show(chatId, "⏳ Пока не вижу подтверждённый перевод с нужной суммой и комментарием. Если ты уже оплатил, подожди немного и проверь снова.", {

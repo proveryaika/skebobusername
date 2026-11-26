@@ -106,3 +106,45 @@ revoke all on function public.credit_referral_bonus(bigint, bigint) from public,
 grant execute on function public.credit_referral_bonus(bigint, bigint) to service_role;
 
 -- Daily quota consumes five standard searches first, then one referral credit per extra search.
+
+
+-- GRAM wallet payments
+create table public.gram_payments (
+ id uuid primary key default gen_random_uuid(),
+ telegram_id bigint not null references public.profiles(telegram_id) on delete cascade,
+ days integer not null check (days between 1 and 365),
+ usd_amount numeric(12,2) not null check (usd_amount > 0),
+ gram_amount numeric(24,9) not null check (gram_amount > 0),
+ nano_amount bigint not null unique check (nano_amount > 0),
+ payment_comment text not null unique,
+ status text not null default 'pending' check (status in ('pending','paid','expired')),
+ tx_hash text unique,
+ created_at timestamptz not null default now(),
+ expires_at timestamptz not null,
+ paid_at timestamptz
+);
+create index gram_payments_user_created_idx on public.gram_payments(telegram_id, created_at desc);
+alter table public.gram_payments enable row level security;
+revoke all on public.gram_payments from anon, authenticated;
+grant select, insert, update on public.gram_payments to service_role;
+
+create or replace function public.credit_gram_payment(p_payment_id uuid, p_tx_hash text)
+returns jsonb language plpgsql set search_path = '' as $$
+declare v_payment public.gram_payments%rowtype;
+begin
+ select * into v_payment from public.gram_payments where id = p_payment_id for update;
+ if not found then return jsonb_build_object('credited', false, 'reason', 'payment_not_found'); end if;
+ if v_payment.status = 'paid' then return jsonb_build_object('credited', false, 'reason', 'already_paid'); end if;
+ if v_payment.status <> 'pending' or v_payment.expires_at < now() then return jsonb_build_object('credited', false, 'reason', 'payment_expired'); end if;
+ if exists (select 1 from public.gram_payments where tx_hash = p_tx_hash and id <> p_payment_id) then
+   return jsonb_build_object('credited', false, 'reason', 'transaction_already_used');
+ end if;
+ update public.profiles
+ set premium_until = greatest(coalesce(premium_until, now()), now()) + make_interval(days => v_payment.days), updated_at = now()
+ where telegram_id = v_payment.telegram_id;
+ if not found then return jsonb_build_object('credited', false, 'reason', 'profile_not_found'); end if;
+ update public.gram_payments set status = 'paid', tx_hash = p_tx_hash, paid_at = now() where id = p_payment_id;
+ return jsonb_build_object('credited', true, 'days', v_payment.days);
+end; $$;
+revoke all on function public.credit_gram_payment(uuid, text) from public, anon, authenticated;
+grant execute on function public.credit_gram_payment(uuid, text) to service_role;

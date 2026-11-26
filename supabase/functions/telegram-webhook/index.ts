@@ -639,7 +639,16 @@ async function handleCallback(callback: any) {
   if (!chatId || !messageId) return;
   await telegram("answerCallbackQuery", { callback_query_id: callback.id });
 
-  if (data === "menu:support") return;
+  if (data === "menu:support") {
+    await editScreen(chatId, messageId,
+      "💬 ПОДДЕРЖКА\n━━━━━━━━━━━━━━\n\nЕсли возник вопрос или нужна помощь — напиши напрямую:",
+      { inline_keyboard: [
+        [{ text: "✉️ Написать в поддержку", url: "https://t.me/zdyet" }],
+        [{ text: "⬅️ В главное меню", callback_data: "menu:main" }],
+      ]}
+    );
+    return;
+  }
   if (data === "premium:stars") { await showStars(userId, chatId, messageId); return; }
   if (data === "premium:crypto") { await showCrypto(userId, chatId, messageId); return; }
   if (data === "premium:gift") { await showGift(userId, chatId, messageId); return; }

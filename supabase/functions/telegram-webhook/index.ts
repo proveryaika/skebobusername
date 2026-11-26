@@ -688,8 +688,12 @@ async function handleMessage(message: any) {
     else if (session.state === "await_word") await runSearch(userId, chatId, "word", { query: text });
     else if (session.state === "await_mask") await runSearch(userId, chatId, "mask", { query: text });
   } catch (error) {
+    const retryCallback = session.state === "await_word" ? "mode:word"
+      : session.state === "await_mask" ? "mode:mask"
+      : session.state === "await_trap_username" ? "trap:add"
+      : "premium:crypto";
     await show(chatId, (error as Error).message + "\n\nПопробуй ещё раз или вернись в меню.", {
-      inline_keyboard: [[{ text: "Повторить ввод", callback_data: session.state === "await_word" ? "mode:word" : "mode:mask" }], ...backMain],
+      inline_keyboard: [[{ text: "Повторить ввод", callback_data: retryCallback }], ...backMain],
     });
   }
 }

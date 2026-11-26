@@ -55,14 +55,14 @@ function randomTail(length: number, chars: string) {
 }
 function unique(items: string[]) { return [...new Set(items)]; }
 
-function generateByLength(length: number, digits: boolean, count = 10): string[] {
+function generateByLength(length: number, digits: boolean, count = 1): string[] {
   const letters = "abcdefghijklmnopqrstuvwxyz";
   const rest = digits ? letters + "0123456789" : letters;
   const results: string[] = [];
   while (results.length < count) results.push(pick(letters) + randomTail(length - 1, rest));
   return unique(results).slice(0, count);
 }
-function generateFromWord(input: string, count = 10): string[] {
+function generateFromWord(input: string, count = 1): string[] {
   const word = input.toLowerCase().replace(/[^a-z0-9_]/g, "").replace(/^\d+/, "").slice(0, 20);
   if (word.length < 2) throw new Error("Введи слово минимум из 2 латинских букв или цифр.");
   const suffixes = ["_", "x", "tv", "hub", "pro", "one", "777", "01", "hq", "go", "it", "lab"];
@@ -76,7 +76,7 @@ function generateFromWord(input: string, count = 10): string[] {
   }
   return unique(results).slice(0, count);
 }
-function generateFromMask(maskInput: string, count = 10): string[] {
+function generateFromMask(maskInput: string, count = 1): string[] {
   const mask = maskInput.toLowerCase().replace(/\s/g, "");
   if (mask.length < 5 || mask.length > 32 || !/^[a-z][a-z0-9_?]*$/.test(mask)) {
     throw new Error("Маска должна быть длиной 5–32 символа, начинаться с буквы и содержать только a-z, 0-9, _ и ?.");
@@ -90,7 +90,7 @@ function generateFromMask(maskInput: string, count = 10): string[] {
   }
   return unique(results).slice(0, count);
 }
-function generateTrap(count = 10): string[] {
+function generateTrap(count = 1): string[] {
   const parts = ["ghost", "vibe", "dark", "wave", "flex", "nova", "byte", "zero", "void", "echo", "rare", "moon"];
   const results: string[] = [];
   for (const part of parts) {
@@ -161,17 +161,25 @@ async function runSearch(userId: number, chatId: number, mode: string, options: 
   }
   await clearSession(userId);
 
-  const rows = candidates.map((name) => [
-    { text: "@" + name, url: "https://t.me/" + name },
-    { text: "⭐", callback_data: "fav:add:" + name },
-  ]);
-  const remaining = quota.premium ? "👑 Премиум: без дневного лимита." : "🎟 Осталось запросов сегодня: " + quota.remaining + " из 5.";
+  const username = candidates[0];
+  const score = Math.min(10, Math.max(5, 6 + (/[0-9]/.test(username) ? 0 : 1) + (username.length <= 6 ? 1 : 0)));
+  const scoreBar = "▰".repeat(score) + "▱".repeat(10 - score);
+  const remaining = quota.premium ? "👑 Премиум · без дневного лимита" : "🎟 Осталось запросов сегодня · " + quota.remaining + " из 5";
+  const againCallback = mode === "word" ? "search:again:word:0" : mode === "mask" ? "search:again:mask:0" : "search:again:" + mode + ":" + (options.digits ? "1" : "0");
   await show(chatId,
-    "🔎 Подборка готова: " + candidates.length + " вариантов\n\n" +
-    candidates.map((name, i) => (i + 1) + ". @" + name).join("\n") +
-    "\n\n" + remaining +
-    "\n\n⚠️ Это сгенерированные варианты, а не подтверждение свободности. Telegram Bot API не позволяет достоверно проверить, свободен ли произвольный личный username. Нажми на имя, чтобы проверить его вручную.",
-    { inline_keyboard: [...rows, [{ text: "🔄 Ещё варианты", callback_data: "search:again:" + mode + ":" + (options.digits ? "1" : "0") }], [{ text: "К режимам поиска", callback_data: "menu:search" }], ...backMain] }
+    "✅ Юзернейм подобран\\n━━━━━━━━━━━━━━\\n\\n" +
+    "Кликабельно: @" + username + "\\n\\n" +
+    "📏 Длина · " + username.length + " симв.\\n" +
+    "⭐ Оценка алгоритма · " + score + "/10\\n" + scoreBar + "\\n" +
+    "💵 Цена · нет подтверждённой рыночной оценки\\n\\n" +
+    "⚠️ Доступность имени не проверена. Открой ссылку, чтобы проверить его в Telegram. Оценка — условная характеристика имени, не стоимость продажи.\\n\\n" +
+    remaining,
+    { inline_keyboard: [
+      [{ text: "@" + username, url: "https://t.me/" + username }, { text: "⭐ В избранное", callback_data: "fav:add:" + username }],
+      [{ text: "🔄 Найти ещё", callback_data: againCallback }],
+      [{ text: "🔎 В меню поиска", callback_data: "menu:search" }],
+      ...backMain
+    ] }
   );
 }
 

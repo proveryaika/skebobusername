@@ -159,7 +159,11 @@ async function handleStart(message: any) {
       p_referrer_id: referredBy, p_referred_id: user.id,
     });
     if (reward?.credited === true) {
-      await show(referredBy, "🎉 По твоей ссылке пришёл новый пользователь!\nТебе начислено +3 бонусных поисковых запроса. 💎", mainKeyboard);
+      const bonusText = "🎉 По твоей ссылке пришёл новый пользователь!\\nТебе начислено +3 бонусных поисковых запроса. 💎";
+      const premiumText = reward.premium_day === true
+        ? "\\n\\n👑 Поздравляем! За 5 приглашённых пользователей тебе начислен 1 день Премиума!"
+        : "";
+      await show(referredBy, bonusText + premiumText, mainKeyboard);
     }
   }
   await clearSession(user.id);
@@ -224,7 +228,7 @@ async function runSearch(userId: number, chatId: number, mode: string, options: 
 
 async function profileScreen(userId: number, chatId: number) {
   const [profiles, history, favorites, referrals] = await Promise.all([
-    db("profiles?select=telegram_username,first_name,created_at,premium_until,referral_code,bonus_searches&telegram_id=eq." + userId + "&limit=1"),
+    db("profiles?select=telegram_username,first_name,created_at,premium_until,premium_referral_days,referral_code,bonus_searches&telegram_id=eq." + userId + "&limit=1"),
     db("search_history?select=mode,query_text,results_count,created_at&telegram_id=eq." + userId + "&order=created_at.desc&limit=500"),
     db("favorites?select=id&telegram_id=eq." + userId),
     db("referrals?select=id,reward_status&referrer_id=eq." + userId),
@@ -274,20 +278,65 @@ async function showFavorites(userId: number, chatId: number) {
   });
 }
 
+async function showPremium(userId: number, chatId: number, messageId: number) {
+  const rows = await db("profiles?select=premium_until&telegram_id=eq." + userId + "&limit=1");
+  const until = rows?.[0]?.premium_until;
+  const active = until && new Date(until).getTime() > Date.now();
+  const status = active ? "✅ Активен до " + new Date(until).toLocaleDateString("ru-RU") : "❌ Не активен";
+  const text = "⭐ Премиум\n━━━━━━━━━━━━━━\n\n" +
+    "💡 Статус · " + status + "\n\n" +
+    "💎 Что даёт Премиум\n\n" +
+    "▫️ Безлимит — без лимита 5/день\n" +
+    "▫️ Без ожиданий — не ждёшь завтрашнего сброса\n" +
+    "▫️ Любые режимы — слово и фильтр без остановки\n\n" +
+    "💰 Стоимость за 1 день\n" +
+    "⭐ Звёзды · 25\n" +
+    "💵 Криптовалюта · $0.35\n\n" +
+    "👇 Выбери способ оплаты";
+  await telegram("editMessageText", {
+    chat_id: chatId, message_id: messageId, text,
+    reply_markup: { inline_keyboard: [
+      [{ text: "⭐ Звёзды · 25", callback_data: "premium:stars" }, { text: "💵 Криптовалюта · $0.35", callback_data: "premium:crypto" }],
+      [{ text: "🎁 Подарить другу", callback_data: "premium:gift" }],
+      [{ text: "🆓 Получить бесплатно", callback_data: "premium:free" }],
+      ...backMain,
+    ]},
+  });
+}
+
 async function showReferrals(userId: number, chatId: number) {
   const [profiles, referrals] = await Promise.all([
-    db("profiles?select=referral_code&telegram_id=eq." + userId + "&limit=1"),
-    db("referrals?select=referred_id,reward_status,created_at&referrer_id=eq." + userId + "&order=created_at.desc&limit=30"),
+    db("profiles?select=referral_code,premium_referral_days,premium_until&telegram_id=eq." + userId + "&limit=1"),
+    db("referrals?select=referred_id,reward_status,created_at&referrer_id=eq." + userId + "&order=created_at.asc&limit=1000"),
   ]);
-  const code = profiles?.[0]?.referral_code;
+  const p = profiles?.[0] ?? {};
+  const code = p.referral_code;
   const link = code ? "https://t.me/usernamehunt1_bot?start=" + code : "Ссылка появится после /start";
   const list = Array.isArray(referrals) ? referrals : [];
-  await show(chatId, "👥 РЕФЕРАЛЬНАЯ ПРОГРАММА\n━━━━━━━━━━━━━━\n\nТвоя ссылка:\n" + link +
-    "\n\nПриглашено: " + list.length +
-    "\nНачислено наград: " + list.filter((x: any) => x.reward_status === "credited").length +
-    "\n\n🎁 За каждого нового пользователя — +3 поисковых запроса. Бонус начисляется один раз за приглашённого.", {
-    inline_keyboard: [[{ text: "📋 Скопировать ссылку", callback_data: "ref:copy" }], [{ text: "⬅️ В профиль", callback_data: "menu:profile" }], ...backMain],
-  });
+  const invited = list.filter((x: any) => x.reward_status === "credited").length;
+  const earnedDays = Number(p.premium_referral_days ?? 0);
+  const progress = invited % 5;
+  const left = progress === 0 ? 5 : 5 - progress;
+  const premiumUntil = p.premium_until && new Date(p.premium_until).getTime() > Date.now()
+    ? "\nТекущий Премиум действует до: " + new Date(p.premium_until).toLocaleDateString("ru-RU")
+    : "";
+  await show(chatId,
+    "🎁 ПОЛУЧИТЬ ПРЕМИУМ БЕСПЛАТНО\n━━━━━━━━━━━━━━\n\n" +
+    "Твоя реферальная ссылка:\n" + link +
+    "\n\n👥 Приглашено друзей: " + invited +
+    "\n👑 Дней Премиума получено: " + earnedDays +
+    "\n\n🎯 Пригласи ещё " + left + " человек" + (left === 1 ? "а" : "") + " — получишь 1 день Премиума!" +
+    "\nПрогресс: " + progress + "/5" +
+    "\n\n💎 Дополнительно за каждого нового приглашённого — +3 поисковых запроса." +
+    premiumUntil,
+    {
+      inline_keyboard: [
+        [{ text: "📋 Скопировать ссылку", callback_data: "ref:copy" }],
+        [{ text: "⬅️ Назад к Премиуму", callback_data: "menu:premium" }],
+        ...backMain,
+      ],
+    }
+  );
 }
 
 async function handleMessage(message: any) {
@@ -318,7 +367,17 @@ async function handleCallback(callback: any) {
   if (!chatId || !messageId) return;
   await telegram("answerCallbackQuery", { callback_query_id: callback.id });
 
-  if (data === "menu:premium" || data === "menu:support") return;
+  if (data === "menu:support") return;
+  if (data === "premium:stars" || data === "premium:crypto" || data === "premium:gift") {
+    await show(chatId, "Эта возможность скоро появится. Пока можно получить Премиум бесплатно за приглашения 👇", {
+      inline_keyboard: [[{ text: "🆓 Получить бесплатно", callback_data: "premium:free" }], ...backMain],
+    });
+    return;
+  }
+  if (data === "premium:free") {
+    await showReferrals(userId, chatId);
+    return;
+  }
   if (data.startsWith("fav:add:")) {
     const username = data.slice("fav:add:".length);
     await db("favorites?on_conflict=telegram_id,username", "POST", { telegram_id: userId, username, source: "search" });
@@ -388,6 +447,8 @@ async function handleCallback(callback: any) {
     case "search:again:mask:0":
       await setSession(userId, "await_mask");
       return await show(chatId, "Отправь новую маску (например ab??_):", { inline_keyboard: [[{ text: "Отмена", callback_data: "menu:search" }], ...backMain] });
+    case "menu:premium":
+      await showPremium(userId, chatId, messageId); return;
     case "menu:profile":
       await profileScreen(userId, chatId); return;
     case "profile:history":

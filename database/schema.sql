@@ -29,6 +29,11 @@ create table public.referrals (
  created_at timestamptz not null default now(), credited_at timestamptz,
  constraint referrals_not_self check (referrer_id <> referred_id)
 );
+create table public.bot_sessions (
+ telegram_id bigint primary key references public.profiles(telegram_id) on delete cascade,
+ state text not null check (state in ('await_word','await_mask')),
+ payload jsonb not null default '{}'::jsonb, updated_at timestamptz not null default now()
+);
 create table public.search_jobs (
  id uuid primary key default gen_random_uuid(),
  telegram_id bigint not null references public.profiles(telegram_id) on delete cascade,
@@ -50,5 +55,6 @@ alter table public.search_history enable row level security;
 alter table public.favorites enable row level security;
 alter table public.referrals enable row level security;
 alter table public.search_jobs enable row level security;
-revoke all on public.profiles, public.search_history, public.favorites, public.referrals, public.search_jobs from anon, authenticated;
+alter table public.bot_sessions enable row level security;
+revoke all on public.profiles, public.search_history, public.favorites, public.referrals, public.search_jobs, public.bot_sessions from anon, authenticated;
 revoke all on sequence public.search_history_id_seq, public.favorites_id_seq, public.referrals_id_seq from anon, authenticated;

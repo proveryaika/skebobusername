@@ -268,7 +268,7 @@ async function profileScreen(userId: number, chatId: number) {
   const name = p.first_name ?? p.telegram_username ?? "Пользователь";
   const text = "👤 МОЙ ПРОФИЛЬ\n━━━━━━━━━━━━━━\n\n" +
     "Имя: " + name + (p.telegram_username ? " (@" + p.telegram_username + ")" : "") + "\n" +
-    "Telegram ID: " + userId + "\n" +
+    "🆔 ID профиля: " + userId + "\n" +
     "Дата регистрации: " + (p.created_at ? new Date(p.created_at).toLocaleDateString("ru-RU") : "—") + "\n\n" +
     "📊 СТАТИСТИКА\nВсего запросов: " + h.length + "\nСегодня: " + todayCount + " / " + (premium ? "∞" : String(5 + Number(p.bonus_searches ?? 0))) + "\nБонусных запросов: " + Number(p.bonus_searches ?? 0) + "\nБонусных запросов: " + Number(p.bonus_searches ?? 0) + "\nИзбранное: " + favCount + "\nПриглашено друзей: " + refCount + "\n\n" +
     "👑 Премиум: " + premiumText + "\n" +
@@ -696,7 +696,7 @@ async function handleMessage(message: any) {
   try {
     if (session.state === "await_admin_premium_user_id") {
       const targetId = Number(text);
-      if (!/^\\d+$/.test(text) || !Number.isSafeInteger(targetId) || targetId <= 0) {
+      if (!/^\d+$/.test(text) || !Number.isSafeInteger(targetId) || targetId <= 0) {
         await show(chatId, "Введи корректный числовой ID профиля.", { inline_keyboard: [[{ text: "Отмена", callback_data: "admin:cancel" }], ...backMain] });
         return;
       }
@@ -714,7 +714,7 @@ async function handleMessage(message: any) {
     else if (session.state === "await_admin_premium_minutes") {
       const minutes = Number(text);
       const targetId = Number(session.payload?.target_telegram_id);
-      if (!/^\\d+$/.test(text) || !Number.isSafeInteger(minutes) || minutes < 1 || minutes > 525600) {
+      if (!/^\d+$/.test(text) || !Number.isSafeInteger(minutes) || minutes < 1 || minutes > 525600) {
         await show(chatId, "Введи целое число минут от 1 до 525600.", { inline_keyboard: [[{ text: "Отмена", callback_data: "admin:cancel" }], ...backMain] });
         return;
       }

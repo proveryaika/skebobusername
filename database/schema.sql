@@ -7,6 +7,8 @@ create table public.profiles (
  is_blocked boolean not null default false, created_at timestamptz not null default now(),
  updated_at timestamptz not null default now(),
  constraint profiles_not_self_referred check (referred_by is null or referred_by <> telegram_id)
+,
+ search_mode text not null default 'readable' check (search_mode in ('readable','random'))
 );
 create table public.search_history (
  id bigint generated always as identity primary key,

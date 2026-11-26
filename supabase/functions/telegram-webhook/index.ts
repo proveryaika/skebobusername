@@ -4,6 +4,8 @@ const BOT_TOKEN = Deno.env.get("BOT_TOKEN") ?? "";
 const WEBHOOK_SECRET = Deno.env.get("TELEGRAM_WEBHOOK_SECRET") ?? "";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+const TONCENTER_API_KEY = Deno.env.get("TONCENTER_API_KEY") ?? "";
+const GRAM_RECEIVE_ADDRESS = "UQDVnyA5v_uLgb7lh_JRe5RfPVhj0MebqrRt0LdlJkavsQuP";
 
 const mainKeyboard = { inline_keyboard: [
   [{ text: "🔍 Поиск", callback_data: "menu:search" }],
@@ -387,6 +389,110 @@ async function showMyGifts(chatId: number, messageId: number) {
   );
 }
 
+
+
+async function createGramPayment(userId: number, days: number, chatId: number, messageId?: number) {
+  if (!TONCENTER_API_KEY) {
+    await show(chatId, "⚠️ Проверка платежей пока не настроена. Напиши в поддержку.", { inline_keyboard: [[{ text: "⬅️ К крипто-тарифам", callback_data: "premium:crypto" }], ...backMain] });
+    return;
+  }
+  const usdAmount = Number((days * 0.35).toFixed(2));
+  const priceResponse = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=the-open-network&vs_currencies=usd&include_last_updated_at=true");
+  if (!priceResponse.ok) throw new Error("Не удалось получить актуальный курс GRAM. Попробуй позже.");
+  const priceData = await priceResponse.json();
+  const gramUsd = Number(priceData?.["the-open-network"]?.usd);
+  const updatedAt = Number(priceData?.["the-open-network"]?.last_updated_at ?? 0);
+  if (!Number.isFinite(gramUsd) || gramUsd <= 0 || !updatedAt || Date.now() / 1000 - updatedAt > 600) {
+    throw new Error("Курс GRAM сейчас недоступен или устарел. Попробуй позже.");
+  }
+  const nanoAmount = Math.round((usdAmount / gramUsd) * 1e9);
+  const gramAmount = nanoAmount / 1e9;
+  const suffix = crypto.randomUUID().replace(/-/g, "").slice(0, 10).toUpperCase();
+  const paymentComment = "SKB-" + suffix;
+  const expiresAt = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+  const response = await fetch(SUPABASE_URL + "/rest/v1/gram_payments", {
+    method: "POST",
+    headers: {
+      apikey: SERVICE_KEY, authorization: "Bearer " + SERVICE_KEY,
+      "content-type": "application/json", prefer: "return=representation",
+    },
+    body: JSON.stringify({
+      telegram_id: userId, days, usd_amount: usdAmount, gram_amount: gramAmount,
+      nano_amount: String(nanoAmount), payment_comment: paymentComment, expires_at: expiresAt,
+    }),
+  });
+  if (!response.ok) throw new Error("Не удалось создать платёж: " + await response.text());
+  const rows = await response.json();
+  const paymentId = rows?.[0]?.id;
+  if (!paymentId) throw new Error("Не удалось сохранить платёж. Попробуй ещё раз.");
+  const text = "💎 ОПЛАТА GRAM\n━━━━━━━━━━━━━━\n\n" +
+    "👑 Премиум · " + days + " дн.\n" +
+    "💵 Стоимость · $" + usdAmount.toFixed(2) + "\n" +
+    "💎 К оплате · " + gramAmount.toFixed(9) + " GRAM\n\n" +
+    "📥 Адрес получения:\n" + GRAM_RECEIVE_ADDRESS + "\n\n" +
+    "📝 Комментарий к переводу (обязательно):\n" + paymentComment + "\n\n" +
+    "⏳ Счёт действует 30 минут. Переведи точную сумму и обязательно добавь комментарий. Premium начислится только после проверки подтверждённой транзакции.";
+  const markup = { inline_keyboard: [
+    [{ text: "🔄 Проверить оплату", callback_data: "gram:check:" + paymentId }],
+    [{ text: "⬅️ К тарифам", callback_data: "premium:crypto" }],
+    ...backMain,
+  ]};
+  if (messageId) await editScreen(chatId, messageId, text, markup);
+  else await show(chatId, text, markup);
+}
+
+async function checkGramPayment(userId: number, paymentId: string, chatId: number) {
+  const rows = await db("gram_payments?select=id,days,nano_amount,payment_comment,status,expires_at,telegram_id& id=eq." + encodeURIComponent(paymentId) + "&limit=1".replace("& id", "&id"));
+  const payment = rows?.[0];
+  if (!payment || Number(payment.telegram_id) !== userId) {
+    await show(chatId, "Платёж не найден.", mainKeyboard);
+    return;
+  }
+  if (payment.status === "paid") {
+    await show(chatId, "✅ Этот платёж уже подтверждён. Premium начислен.", mainKeyboard);
+    return;
+  }
+  if (payment.status !== "pending" || new Date(payment.expires_at).getTime() < Date.now()) {
+    await db("gram_payments?id=eq." + encodeURIComponent(paymentId), "PATCH", { status: "expired" });
+    await show(chatId, "⌛ Срок счёта истёк. Создай новый платёж в разделе Premium.", { inline_keyboard: [[{ text: "Новый счёт", callback_data: "premium:crypto" }], ...backMain] });
+    return;
+  }
+  const params = new URLSearchParams({ account: GRAM_RECEIVE_ADDRESS, limit: "100", sort: "desc" });
+  const response = await fetch("https://toncenter.com/api/v3/transactions?" + params.toString(), {
+    headers: { "X-API-Key": TONCENTER_API_KEY },
+  });
+  if (!response.ok) throw new Error("TON Center временно недоступен (" + response.status + "). Попробуй проверить ещё раз.");
+  const data = await response.json();
+  const txs = Array.isArray(data?.transactions) ? data.transactions : [];
+  const expectedNano = BigInt(String(payment.nano_amount));
+  const expectedComment = String(payment.payment_comment);
+  const found = txs.find((tx: any) => {
+    const msg = tx?.in_msg;
+    const decoded = msg?.message_content?.decoded;
+    const comment = decoded?.comment ?? decoded?.text ?? msg?.decoded_comment ?? "";
+    const value = BigInt(String(msg?.value ?? "0"));
+    return String(msg?.destination ?? "").includes(GRAM_RECEIVE_ADDRESS.slice(0, 8)) &&
+      value === expectedNano && String(comment) === expectedComment &&
+      tx?.description?.aborted !== true && tx?.description?.compute_ph?.success !== false;
+  });
+  if (!found) {
+    await show(chatId, "⏳ Пока не вижу подтверждённый перевод с нужной суммой и комментарием. Если ты уже оплатил, подожди немного и проверь снова.", {
+      inline_keyboard: [[{ text: "🔄 Проверить ещё раз", callback_data: "gram:check:" + paymentId }], ...backMain],
+    });
+    return;
+  }
+  const txHash = String(found.hash ?? "");
+  if (!txHash) throw new Error("В транзакции отсутствует hash. Обратись в поддержку.");
+  const result = await db("rpc/credit_gram_payment", "POST", { p_payment_id: paymentId, p_tx_hash: txHash });
+  if (result?.credited) {
+    await show(chatId, "🎉 Оплата подтверждена!\n\n👑 Тебе начислено " + result.days + " дн. Premium. Спасибо за поддержку!", mainKeyboard);
+  } else if (result?.reason === "already_paid") {
+    await show(chatId, "✅ Этот платёж уже был обработан. Premium начислен.", mainKeyboard);
+  } else {
+    await show(chatId, "⚠️ Не удалось начислить Premium автоматически. Не отправляй повторный платёж — обратись в поддержку.", mainKeyboard);
+  }
+}
+
 async function showReferrals(userId: number, chatId: number) {
   const [profiles, referrals] = await Promise.all([
     db("profiles?select=referral_code,premium_referral_days,premium_until&telegram_id=eq." + userId + "&limit=1"),
@@ -442,9 +548,7 @@ async function handleMessage(message: any) {
         });
         return;
       }
-      await show(chatId, "💵 Выбрано " + days + " дн. Премиума\nСтоимость: $" + (0.35 * days).toFixed(2) +
-        "\n\nПодключение реальной оплаты будет следующим этапом. Сейчас деньги не списываются.",
-        { inline_keyboard: [[{ text: "⬅️ К тарифам", callback_data: "premium:crypto" }], ...backMain] });
+      await createGramPayment(userId, days, chatId);
     }
     else if (session.state === "await_word") await runSearch(userId, chatId, "word", { query: text });
     else if (session.state === "await_mask") await runSearch(userId, chatId, "mask", { query: text });
@@ -477,7 +581,11 @@ async function handleCallback(callback: any) {
   }
   if (data.startsWith("crypto:plan:")) {
     const days = Number(data.split(":")[2]);
-    if ([1,3,7,30].includes(days)) await showPaymentPending(chatId, messageId, "💵 Тариф выбран", days + " дн. Премиума · $" + (0.35 * days).toFixed(2), "premium:crypto");
+    if ([1,3,7,30].includes(days)) await createGramPayment(userId, days, chatId, messageId);
+    return;
+  }
+  if (data.startsWith("gram:check:")) {
+    await checkGramPayment(userId, data.slice("gram:check:".length), chatId);
     return;
   }
   if (data === "crypto:custom") {

@@ -186,6 +186,23 @@ Deno.serve(async (req: Request) => {
     return new Response("Unauthorized", { status: 401 });
   }
 
+  // One-time setup call: registers this Edge Function as the Telegram webhook.
+  if (new URL(req.url).searchParams.get("setup") === "1") {
+    const webhookUrl = `${SUPABASE_URL}/functions/v1/telegram-webhook`;
+    const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/setWebhook`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        url: webhookUrl,
+        secret_token: WEBHOOK_SECRET,
+        allowed_updates: ["message", "callback_query"],
+        drop_pending_updates: false
+      })
+    });
+    const result = await response.json();
+    return Response.json(result, { status: response.ok ? 200 : 502 });
+  }
+
   try {
     const update = await req.json();
     if (update.message?.text?.startsWith("/start")) {

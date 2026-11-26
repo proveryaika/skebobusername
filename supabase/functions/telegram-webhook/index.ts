@@ -442,7 +442,7 @@ async function createGramPayment(userId: number, days: number, chatId: number, m
 }
 
 async function checkGramPayment(userId: number, paymentId: string, chatId: number) {
-  const rows = await db("gram_payments?select=id,days,nano_amount,payment_comment,status,expires_at,telegram_id& id=eq." + encodeURIComponent(paymentId) + "&limit=1".replace("& id", "&id"));
+  const rows = await db("gram_payments?select=id,days,nano_amount,payment_comment,status,expires_at,telegram_id&id=eq." + encodeURIComponent(paymentId) + "&limit=1");
   const payment = rows?.[0];
   if (!payment || Number(payment.telegram_id) !== userId) {
     await show(chatId, "Платёж не найден.", mainKeyboard);
@@ -471,8 +471,7 @@ async function checkGramPayment(userId: number, paymentId: string, chatId: numbe
     const decoded = msg?.message_content?.decoded;
     const comment = decoded?.comment ?? decoded?.text ?? msg?.decoded_comment ?? "";
     const value = BigInt(String(msg?.value ?? "0"));
-    return String(msg?.destination ?? "").includes(GRAM_RECEIVE_ADDRESS.slice(0, 8)) &&
-      value === expectedNano && String(comment) === expectedComment &&
+    return value === expectedNano && String(comment) === expectedComment &&
       tx?.description?.aborted !== true && tx?.description?.compute_ph?.success !== false;
   });
   if (!found) {

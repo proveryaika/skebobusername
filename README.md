@@ -2,36 +2,50 @@
 
 Telegram bot: [@usernamehunt1_bot](https://t.me/usernamehunt1_bot)
 
-## Current MVP
+## Architecture
 
-- `/start` opens the main menu.
-- Main menu has Search, Profile, Referral program, Premium, and Support buttons.
-- Search opens the search mode menu.
-- `5 букв` opens the five-character format screen.
-- Choosing digits / letters confirms the selected format.
+- **GitHub** stores the bot source and database schema snapshot.
+- **Supabase Postgres** stores profiles, search history, favorites, referrals, and queued search jobs.
+- **Supabase Edge Function** receives Telegram webhook updates. No separate Render/Railway server is required.
 
-Other menu sections and search modes are currently placeholders. Search data collection and database integration will be added in later steps.
+## Implemented
 
-## Run locally
+- `/start` creates or updates a Telegram profile and opens the main menu.
+- Main menu: Search, Profile, Referral program, Premium, Support.
+- Search menu with 5-letter, 6-letter, mask, word, trap, and settings buttons.
+- Five-character search format selection (with digits / letters only) is stored in `search_history`.
+- Referral start parameters are attributed to profiles.
+- Webhook requests are protected by Telegram's webhook secret header.
+- Database tables have RLS enabled and direct access for `anon` / `authenticated` revoked. The Edge Function uses the server-side service-role key.
 
-1. Install Python 3.10+.
-2. Install dependencies:
+Search generation, username availability checks, payment processing, and full profile/referral statistics are not implemented yet.
 
-   ```bash
-   pip install -r requirements.txt
-   ```
+## Supabase setup
 
-3. Set the bot token as an environment variable. Do not commit your real token:
+Project: `TopGram`
 
-   - macOS / Linux: `export BOT_TOKEN="your-token"`
-   - PowerShell: `$env:BOT_TOKEN="your-token"`
+Deployable function source: `supabase/functions/telegram-webhook/index.ts`
 
-4. Start the bot:
+Add these secrets in **Supabase Dashboard → Edge Functions → Secrets**:
 
-   ```bash
-   python bot.py
-   ```
+- `BOT_TOKEN` — token from BotFather. Never commit it or send it in chat.
+- `TELEGRAM_WEBHOOK_SECRET` — a private random string (5–256 characters, using letters, numbers, underscores, or hyphens).
 
-## GitHub Actions / deployment
+The function URL is:
 
-Store the token as a secret named `BOT_TOKEN` in the hosting platform. Never put the token directly in source code or send it in chat.
+`https://azfmkeccmactyoneotpk.supabase.co/functions/v1/telegram-webhook`
+
+After adding secrets, register the Telegram webhook with Bot API `setWebhook`, using the function URL and the exact same value for `secret_token`. Set `allowed_updates` to `message,callback_query`. The function has JWT verification disabled because Telegram authenticates requests with the webhook secret header.
+
+## Database
+
+`database/schema.sql` is a schema snapshot for reference. The live project schema is managed in Supabase.
+
+## Legacy local prototype
+
+`bot.py` is the original polling prototype. The active architecture is the Supabase Edge Function webhook; do not run both at once.
+
+## Security
+
+- Never commit `.env`, bot tokens, Supabase secret keys, or webhook secrets.
+- Never put the Supabase service-role key in a client app.

@@ -144,7 +144,8 @@ async function handleStart(message: any) {
   const parts = (message.text ?? "").trim().split(/\s+/);
   const referralCode = parts.length > 1 ? parts[1] : null;
   let referredBy: number | null = null;
-  if (referralCode) {
+  const existingProfile = await db("profiles?select=telegram_id&telegram_id=eq." + user.id + "&limit=1");
+  if ((!Array.isArray(existingProfile) || existingProfile.length === 0) && referralCode) {
     const found = await db("profiles?select=telegram_id&referral_code=eq." + encodeURIComponent(referralCode));
     if (Array.isArray(found) && found.length && Number(found[0].telegram_id) !== user.id) referredBy = Number(found[0].telegram_id);
   }
@@ -153,7 +154,14 @@ async function handleStart(message: any) {
     first_name: user.first_name ?? null, last_name: user.last_name ?? null,
     language_code: user.language_code ?? null, ...(referredBy ? { referred_by: referredBy } : {}),
   });
-  if (referredBy) await db("referrals?on_conflict=referred_id", "POST", { referrer_id: referredBy, referred_id: user.id });
+  if (referredBy) {
+    const reward = await db("rpc/credit_referral_bonus", "POST", {
+      p_referrer_id: referredBy, p_referred_id: user.id,
+    });
+    if (reward?.credited === true) {
+      await show(referredBy, "🎉 По твоей ссылке пришёл новый пользователь!\nТебе начислено +3 бонусных поисковых запроса. 💎", mainKeyboard);
+    }
+  }
   await clearSession(user.id);
   await show(chatId, "👋 Привет, " + (user.first_name ?? "друг") + "!\n\nДобро пожаловать в Skebob Username.\nВыбери раздел 👇", mainKeyboard);
 }
@@ -192,7 +200,10 @@ async function runSearch(userId: number, chatId: number, mode: string, options: 
   const username = candidates[0];
   const score = Math.min(10, Math.max(5, 6 + (/[0-9]/.test(username) ? 0 : 1) + (username.length <= 6 ? 1 : 0)));
   const scoreBar = "▰".repeat(score) + "▱".repeat(10 - score);
-  const remaining = quota.premium ? "👑 Премиум · без дневного лимита" : "🎟 Осталось запросов сегодня · " + quota.remaining + " из 5";
+  const remaining = quota.premium
+    ? "👑 Премиум · без дневного лимита"
+    : "🎟 Осталось сегодня · " + quota.remaining + " из 5" +
+      (quota.bonus_remaining > 0 ? "\n🎁 Бонусных запросов · " + quota.bonus_remaining : "");
   const againCallback = mode === "word" ? "search:again:word:0" : mode === "mask" ? "search:again:mask:0" : "search:again:" + mode + ":" + (options.digits ? "1" : "0");
   await show(chatId,
     "✅ Юзернейм подобран\n━━━━━━━━━━━━━━\n\n" +
@@ -213,7 +224,7 @@ async function runSearch(userId: number, chatId: number, mode: string, options: 
 
 async function profileScreen(userId: number, chatId: number) {
   const [profiles, history, favorites, referrals] = await Promise.all([
-    db("profiles?select=telegram_username,first_name,created_at,premium_until,referral_code&telegram_id=eq." + userId + "&limit=1"),
+    db("profiles?select=telegram_username,first_name,created_at,premium_until,referral_code,bonus_searches&telegram_id=eq." + userId + "&limit=1"),
     db("search_history?select=mode,query_text,results_count,created_at&telegram_id=eq." + userId + "&order=created_at.desc&limit=500"),
     db("favorites?select=id&telegram_id=eq." + userId),
     db("referrals?select=id,reward_status&referrer_id=eq." + userId),
@@ -231,7 +242,7 @@ async function profileScreen(userId: number, chatId: number) {
     "Имя: " + name + (p.telegram_username ? " (@" + p.telegram_username + ")" : "") + "\n" +
     "Telegram ID: " + userId + "\n" +
     "Дата регистрации: " + (p.created_at ? new Date(p.created_at).toLocaleDateString("ru-RU") : "—") + "\n\n" +
-    "📊 СТАТИСТИКА\nВсего запросов: " + h.length + "\nСегодня: " + todayCount + " / " + (premium ? "∞" : "5") + "\nИзбранное: " + favCount + "\nПриглашено друзей: " + refCount + "\n\n" +
+    "📊 СТАТИСТИКА\nВсего запросов: " + h.length + "\nСегодня: " + todayCount + " / " + (premium ? "∞" : "5") + "\nБонусных запросов: " + Number(p.bonus_searches ?? 0) + "\nИзбранное: " + favCount + "\nПриглашено друзей: " + refCount + "\n\n" +
     "👑 Премиум: " + premiumText + "\n" +
     "🎟 Реферальный код: " + (p.referral_code ?? "—");
   await show(chatId, text, { inline_keyboard: [
@@ -274,7 +285,7 @@ async function showReferrals(userId: number, chatId: number) {
   await show(chatId, "👥 РЕФЕРАЛЬНАЯ ПРОГРАММА\n━━━━━━━━━━━━━━\n\nТвоя ссылка:\n" + link +
     "\n\nПриглашено: " + list.length +
     "\nНачислено наград: " + list.filter((x: any) => x.reward_status === "credited").length +
-    "\n\nОтправь ссылку друзьям. Начисление бонусов пока не подключено.", {
+    "\n\n🎁 За каждого нового пользователя — +3 поисковых запроса. Бонус начисляется один раз за приглашённого.", {
     inline_keyboard: [[{ text: "📋 Скопировать ссылку", callback_data: "ref:copy" }], [{ text: "⬅️ В профиль", callback_data: "menu:profile" }], ...backMain],
   });
 }

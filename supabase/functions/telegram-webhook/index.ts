@@ -153,9 +153,12 @@ async function runSearch(userId: number, chatId: number, mode: string, options: 
 
 
   const queryText = options.query ?? (mode === "length_5" || mode === "length_6" ? (options.digits ? "с цифрами" : "только буквы") : mode);
-  await db("search_history?telegram_id=eq." + userId + "&order=created_at.desc&limit=1", "PATCH", {
-    query_text: queryText, results_count: candidates.length,
-  });
+  const latestSearch = await db("search_history?select=id&telegram_id=eq." + userId + "&order=created_at.desc&limit=1");
+  if (Array.isArray(latestSearch) && latestSearch.length) {
+    await db("search_history?id=eq." + latestSearch[0].id, "PATCH", {
+      query_text: queryText, results_count: candidates.length,
+    });
+  }
   await clearSession(userId);
 
   const rows = candidates.map((name) => [

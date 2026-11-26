@@ -9,6 +9,7 @@ create table public.profiles (
  constraint profiles_not_self_referred check (referred_by is null or referred_by <> telegram_id)
 ,
  search_mode text not null default 'readable' check (search_mode in ('readable','random'))
+, bonus_searches integer not null default 0 check (bonus_searches >= 0)
 );
 create table public.search_history (
  id bigint generated always as identity primary key,
@@ -60,3 +61,24 @@ alter table public.search_jobs enable row level security;
 alter table public.bot_sessions enable row level security;
 revoke all on public.profiles, public.search_history, public.favorites, public.referrals, public.search_jobs, public.bot_sessions from anon, authenticated;
 revoke all on sequence public.search_history_id_seq, public.favorites_id_seq, public.referrals_id_seq from anon, authenticated;
+
+-- Referral reward: one-time +3 search credits per newly referred Telegram user.
+create or replace function public.credit_referral_bonus(p_referrer_id bigint, p_referred_id bigint)
+returns jsonb language plpgsql security definer set search_path = '' as $$
+declare v_referral_id bigint;
+begin
+  if p_referrer_id = p_referred_id then return jsonb_build_object('credited', false, 'reason', 'self_referral'); end if;
+  if not exists (select 1 from public.profiles where telegram_id = p_referrer_id) then return jsonb_build_object('credited', false, 'reason', 'referrer_missing'); end if;
+  if not exists (select 1 from public.profiles where telegram_id = p_referred_id and referred_by = p_referrer_id) then return jsonb_build_object('credited', false, 'reason', 'not_attributed'); end if;
+  insert into public.referrals (referrer_id, referred_id, reward_status)
+  values (p_referrer_id, p_referred_id, 'credited')
+  on conflict (referred_id) do nothing returning id into v_referral_id;
+  if v_referral_id is null then return jsonb_build_object('credited', false, 'reason', 'already_rewarded'); end if;
+  update public.profiles set bonus_searches = bonus_searches + 3, updated_at = now() where telegram_id = p_referrer_id;
+  update public.referrals set reward_status = 'credited', credited_at = now() where id = v_referral_id;
+  return jsonb_build_object('credited', true, 'bonus', 3);
+end; $$;
+revoke all on function public.credit_referral_bonus(bigint, bigint) from public, anon, authenticated;
+grant execute on function public.credit_referral_bonus(bigint, bigint) to service_role;
+
+-- Daily quota consumes five standard searches first, then one referral credit per extra search.

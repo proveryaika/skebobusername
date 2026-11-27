@@ -5,9 +5,6 @@ const WEBHOOK_SECRET = Deno.env.get("TELEGRAM_WEBHOOK_SECRET") ?? "";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const TONCENTER_API_KEY = Deno.env.get("TONCENTER_API_KEY") ?? "";
-const TELEGRAM_API_ID = Number(Deno.env.get("TELEGRAM_API_ID") ?? 0);
-const TELEGRAM_API_HASH = Deno.env.get("TELEGRAM_API_HASH") ?? "";
-const TELEGRAM_SESSION_STRING = Deno.env.get("TELEGRAM_SESSION_STRING") ?? "";
 const GRAM_RECEIVE_ADDRESS = "UQDVnyA5v_uLgb7lh_JRe5RfPVhj0MebqrRt0LdlJkavsQuP";
 
 const BOT_OWNER_ID = 8032877285;
@@ -197,49 +194,25 @@ async function handleStart(message: any) {
   await show(chatId, "👋 Привет, " + (user.first_name ?? "друг") + "!\n\nДобро пожаловать в Skebob Username.\nВыбери раздел 👇", mainKeyboardFor(user.id));
 }
 
-async function findOfficialAvailableUsername(candidates: string[]): Promise<string | null> {
-  if (!Number.isSafeInteger(TELEGRAM_API_ID) || TELEGRAM_API_ID <= 0 ||
-      !TELEGRAM_API_HASH || !TELEGRAM_SESSION_STRING) {
-    throw new Error("Официальная проверка ещё не настроена: отсутствует TELEGRAM_SESSION_STRING или API-ключи.");
-  }
-
-  const [{ TelegramClient }, { MemoryStorage }, { convertFromTelethonSession }] = await Promise.all([
-    import("npm:@mtcute/web@0.32.8"),
-    import("npm:@mtcute/core@0.32.8"),
-    import("npm:@mtcute/convert@0.32.3"),
-  ]);
-
-  const client = new TelegramClient({
-    apiId: TELEGRAM_API_ID,
-    apiHash: TELEGRAM_API_HASH,
-    storage: new MemoryStorage(),
-  });
-
-  try {
-    await client.importSession(convertFromTelethonSession(TELEGRAM_SESSION_STRING));
-    await client.connect();
-
-    for (const username of candidates.slice(0, 30)) {
-      try {
-        const available = await client.call({
-          _: "account.checkUsername",
-          username,
-        });
-        if (available === true) return username;
-      } catch (error) {
-        const message = String((error as Error)?.message ?? error);
-        if (/USERNAME_(?:INVALID|OCCUPIED|PURCHASE_AVAILABLE)/i.test(message)) {
-          // Purchased Fragment usernames are not treated as free.
-        } else {
-          throw new Error("Официальная проверка Telegram не прошла: " + message);
-        }
-      }
-      await new Promise((resolve) => setTimeout(resolve, 450));
+async function findLikelyAvailableUsername(candidates: string[]): Promise<string | null> {
+  // Public t.me pages cannot prove account.checkUsername availability.
+  // Only treat an explicit HTTP 404 as a weak signal; never label it guaranteed free.
+  for (const username of candidates.slice(0, 30)) {
+    try {
+      const response = await fetch("https://t.me/" + encodeURIComponent(username), {
+        method: "GET",
+        redirect: "manual",
+        headers: { "user-agent": "Mozilla/5.0" },
+      });
+      const html = await response.text();
+      const hasPublicProfile = /tgme_page_(?:title|description|extra)|tgme_page_photo/i.test(html);
+      if (response.status === 404 && !hasPublicProfile) return username;
+    } catch (error) {
+      console.warn("Public username check failed for", username, String(error));
     }
-    return null;
-  } finally {
-    await client.disconnect().catch(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 350));
   }
+  return null;
 }
 
 function againSearchCallback(mode: string, digits: boolean): string {
@@ -271,19 +244,19 @@ async function runSearch(userId: number, chatId: number, mode: string, options: 
     return;
   }
 
-  await show(chatId, "🔎 Проверяю кандидатов через официальный API Telegram…", {
+  await show(chatId, "🔎 Проверяю публичные страницы Telegram…", {
     inline_keyboard: [[{ text: "Отмена", callback_data: "menu:search" }], ...backMain],
   });
   const checked: string[] = [];
   try {
-    const found = await findOfficialAvailableUsername(candidates);
+    const found = await findLikelyAvailableUsername(candidates);
     if (found) checked.push(found);
   } catch (error) {
     await clearSession(userId);
     await show(chatId,
-      "⚠️ ОФИЦИАЛЬНАЯ ПРОВЕРКА НЕДОСТУПНА\n\n" +
+      "⚠️ ПУБЛИЧНАЯ ПРОВЕРКА НЕ УДАЛАСЬ\n\n" +
       (error as Error).message +
-      "\n\nЯ не буду показывать непроверенные варианты как свободные. Проверь настройки и попробуй позже.",
+      "\n\nПубличная проверка не гарантирует доступность имени. Проверь настройки и попробуй позже.",
       { inline_keyboard: [[{ text: "🔄 Повторить", callback_data: againSearchCallback(mode, options.digits ?? false) }], ...backMain] }
     );
     return;
@@ -305,7 +278,7 @@ async function runSearch(userId: number, chatId: number, mode: string, options: 
   const againCallback = mode === "word" ? "search:again:word:0" : mode === "mask" ? "search:again:mask:0" : "search:again:" + mode + ":" + (options.digits ? "1" : "0");
   if (!checked.length) {
     await show(chatId,
-      "😕 Сейчас не удалось найти ни одного имени, прошедшего обе проверки.\n\nЯ не буду показывать непроверенные варианты как свободные. Попробуй ещё раз чуть позже.\n\n" + remaining,
+      "😕 Сейчас не удалось найти ни одного имени, который публичная проверка пометила как вероятно свободный.\n\nЯ не буду показывать непроверенные варианты как свободные. Попробуй ещё раз чуть позже.\n\n" + remaining,
       { inline_keyboard: [[{ text: "🔄 Проверить ещё", callback_data: againCallback }], [{ text: "🔎 В меню поиска", callback_data: "menu:search" }], ...backMain] }
     );
     return;
@@ -320,7 +293,7 @@ async function runSearch(userId: number, chatId: number, mode: string, options: 
   await show(chatId,
     "✅ НАЙДЕН ОДИН КАНДИДАТ\n━━━━━━━━━━━━━━\n\n" +
     "🟢 @" + username + " · " + username.length + " симв. · оценка " + score + "/10" +
-    "\n\n🔍 Доступность подтверждена официальным методом Telegram account.checkUsername. Статус может измениться, поэтому попробуй сразу установить выбранное имя.\n\n" +
+    "\n\n🔍 Публичная страница Telegram не найдена — имя может быть свободно, но это не гарантия. Проверь доступность непосредственно в Telegram перед использованием. Статус может измениться, поэтому попробуй сразу установить выбранное имя.\n\n" +
     remaining,
     { inline_keyboard: keyboard }
   );

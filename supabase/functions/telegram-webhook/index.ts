@@ -279,8 +279,8 @@ async function runSearch(userId: number, chatId: number, mode: string, options: 
   ]];
   keyboard.push([{ text: "🔄 Найти ещё", callback_data: againCallback }], [{ text: "🔎 В меню поиска", callback_data: "menu:search" }], ...backMain);
   await show(chatId,
-    "✅ КАНДИДАТЫ, ПРОШЕДШИЕ ПРОВЕРКУ\n━━━━━━━━━━━━━━\n\n" +
-    rows.join("\n") +
+    "✅ НАЙДЕН ОДИН КАНДИДАТ\n━━━━━━━━━━━━━━\n\n" +
+    "🟢 @" + username + " · " + username.length + " симв. · оценка " + score + "/10" +
     "\n\n🔍 Проверены по публичным страницам Telegram и Fragment. Это не официальный метод Telegram; статус может измениться, поэтому попробуй сразу установить выбранное имя.\n\n" +
     remaining,
     { inline_keyboard: keyboard }

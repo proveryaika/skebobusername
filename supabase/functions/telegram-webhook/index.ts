@@ -204,9 +204,9 @@ async function findOfficialAvailableUsername(candidates: string[]): Promise<stri
   }
 
   const [{ TelegramClient }, { MemoryStorage }, { convertFromTelethonSession }] = await Promise.all([
-    import("jsr:@mtcute/deno@0.32.8"),
-    import("jsr:@mtcute/core@0.32.8"),
-    import("jsr:@mtcute/convert@0.32.3"),
+    import("npm:@mtcute/web@0.32.8"),
+    import("npm:@mtcute/core@0.32.8"),
+    import("npm:@mtcute/convert@0.32.3"),
   ]);
 
   const client = new TelegramClient({

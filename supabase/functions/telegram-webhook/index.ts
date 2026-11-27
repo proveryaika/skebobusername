@@ -194,14 +194,40 @@ async function handleStart(message: any) {
   await show(chatId, "👋 Привет, " + (user.first_name ?? "друг") + "!\n\nДобро пожаловать в Skebob Username.\nВыбери раздел 👇", mainKeyboardFor(user.id));
 }
 
+async function checkPublicUsernameAvailability(username: string): Promise<boolean> {
+  const name = username.toLowerCase();
+  if (!/^[a-z][a-z0-9_]{4,31}$/.test(name) || name.endsWith("_") || name.includes("__")) return false;
+  const headers = { "User-Agent": "Mozilla/5.0 (compatible; UsernameAvailabilityCheck/1.0)" };
+  try {
+    const [tgResponse, fragmentResponse] = await Promise.all([
+      fetch("https://t.me/" + encodeURIComponent(name), { headers, signal: AbortSignal.timeout(7000) }),
+      fetch("https://fragment.com/username/" + encodeURIComponent(name), { headers, signal: AbortSignal.timeout(7000) }),
+    ]);
+    if (!tgResponse.ok || !fragmentResponse.ok) return false;
+    const [tgHtml, fragmentHtml] = await Promise.all([tgResponse.text(), fragmentResponse.text()]);
+    if (/captcha|cloudflare|just a moment|too many requests/i.test(tgHtml + fragmentHtml)) return false;
+    if (/tgme_page_title|tgme_page_extra/.test(tgHtml)) return false;
+    const titleMatch = fragmentHtml.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    if (!titleMatch) return false;
+    const title = titleMatch[1].replace(/&[^;]+;/g, " ").toLowerCase();
+    if (title.includes(name)) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function runSearch(userId: number, chatId: number, mode: string, options: { digits?: boolean; query?: string } = {}) {
   let candidates: string[];
   const searchMode = await getSearchMode(userId);
-  if (mode === "length_5") candidates = searchMode === "readable" && !options.digits ? [generateReadable(5)] : generateByLength(5, options.digits ?? false);
-  else if (mode === "length_6") candidates = searchMode === "readable" && !options.digits ? [generateReadable(6)] : generateByLength(6, options.digits ?? false);
-  else if (mode === "word") candidates = generateFromWord(options.query ?? "");
-  else if (mode === "mask") candidates = generateFromMask(options.query ?? "");
-  else candidates = searchMode === "readable" ? [generateReadable(6)] : generateTrap();
+  if (mode === "length_5") candidates = searchMode === "readable" && !options.digits
+    ? unique(Array.from({ length: 60 }, () => generateReadable(5))) : generateByLength(5, options.digits ?? false, 60);
+  else if (mode === "length_6") candidates = searchMode === "readable" && !options.digits
+    ? unique(Array.from({ length: 60 }, () => generateReadable(6))) : generateByLength(6, options.digits ?? false, 60);
+  else if (mode === "word") candidates = generateFromWord(options.query ?? "", 60);
+  else if (mode === "mask") candidates = generateFromMask(options.query ?? "", 60);
+  else candidates = searchMode === "readable"
+    ? unique(Array.from({ length: 60 }, () => generateReadable(6))) : generateTrap(30);
 
   const quota = await db("rpc/consume_daily_search", "POST", {
     p_telegram_id: userId, p_mode: mode, p_include_digits: options.digits ?? null,
@@ -214,42 +240,56 @@ async function runSearch(userId: number, chatId: number, mode: string, options: 
     return;
   }
 
-
+  await show(chatId, "🔎 Проверяю кандидатов в Telegram и Fragment. Покажу только прошедшие обе проверки…", {
+    inline_keyboard: [[{ text: "Отмена", callback_data: "menu:search" }], ...backMain],
+  });
+  const checked: string[] = [];
+  for (let i = 0; i < candidates.length && checked.length < 5; i += 3) {
+    const results = await Promise.all(candidates.slice(i, i + 3).map(async (name) => ({
+      name, free: await checkPublicUsernameAvailability(name),
+    })));
+    for (const result of results) if (result.free && !checked.includes(result.name)) checked.push(result.name);
+    if (i + 3 < candidates.length && checked.length < 5) await new Promise((resolve) => setTimeout(resolve, 350));
+  }
 
   const queryText = options.query ?? (mode === "length_5" || mode === "length_6" ? (options.digits ? "с цифрами" : "только буквы") : mode);
   const latestSearch = await db("search_history?select=id&telegram_id=eq." + userId + "&order=created_at.desc&limit=1");
   if (Array.isArray(latestSearch) && latestSearch.length) {
     await db("search_history?id=eq." + latestSearch[0].id, "PATCH", {
-      query_text: queryText, results_count: candidates.length,
+      query_text: queryText, results_count: checked.length,
     });
   }
   await clearSession(userId);
 
-  const username = candidates[0];
-  const score = Math.min(10, Math.max(5, 6 + (/[0-9]/.test(username) ? 0 : 1) + (username.length <= 6 ? 1 : 0)));
-  const scoreBar = "▰".repeat(score) + "▱".repeat(10 - score);
   const remaining = quota.premium
     ? "👑 Премиум · без дневного лимита"
     : "🎟 Осталось сегодня · " + quota.remaining + " из 5" +
       (quota.bonus_remaining > 0 ? "\n🎁 Бонусных запросов · " + quota.bonus_remaining : "");
   const againCallback = mode === "word" ? "search:again:word:0" : mode === "mask" ? "search:again:mask:0" : "search:again:" + mode + ":" + (options.digits ? "1" : "0");
+  if (!checked.length) {
+    await show(chatId,
+      "😕 Сейчас не удалось найти ни одного имени, прошедшего обе проверки.\n\nЯ не буду показывать непроверенные варианты как свободные. Попробуй ещё раз чуть позже.\n\n" + remaining,
+      { inline_keyboard: [[{ text: "🔄 Проверить ещё", callback_data: againCallback }], [{ text: "🔎 В меню поиска", callback_data: "menu:search" }], ...backMain] }
+    );
+    return;
+  }
+  const rows = checked.map((username) => {
+    const score = Math.min(10, Math.max(5, 6 + (/[0-9]/.test(username) ? 0 : 1) + (username.length <= 6 ? 1 : 0)));
+    return "🟢 @" + username + " · " + username.length + " симв. · оценка " + score + "/10";
+  });
+  const keyboard: any[] = checked.map((username) => [
+    { text: "@" + username, url: "https://t.me/" + username },
+    { text: "⭐", callback_data: "fav:add:" + username },
+  ]);
+  keyboard.push([{ text: "🔄 Найти ещё", callback_data: againCallback }], [{ text: "🔎 В меню поиска", callback_data: "menu:search" }], ...backMain);
   await show(chatId,
-    "✅ Юзернейм подобран\n━━━━━━━━━━━━━━\n\n" +
-    "Кликабельно: @" + username + "\n\n" +
-    "📏 Длина · " + username.length + " симв.\n" +
-    "⭐ Оценка алгоритма · " + score + "/10\n" + scoreBar + "\n" +
-    "💵 Цена · нет подтверждённой рыночной оценки\n\n" +
-    "⚠️ Доступность имени не проверена. Открой ссылку, чтобы проверить его в Telegram. Оценка — условная характеристика имени, не стоимость продажи.\n\n" +
+    "✅ КАНДИДАТЫ, ПРОШЕДШИЕ ПРОВЕРКУ\n━━━━━━━━━━━━━━\n\n" +
+    rows.join("\n") +
+    "\n\n🔍 Проверены по публичным страницам Telegram и Fragment. Это не официальный метод Telegram; статус может измениться, поэтому попробуй сразу установить выбранное имя.\n\n" +
     remaining,
-    { inline_keyboard: [
-      [{ text: "@" + username, url: "https://t.me/" + username }, { text: "⭐ В избранное", callback_data: "fav:add:" + username }],
-      [{ text: "🔄 Найти ещё", callback_data: againCallback }],
-      [{ text: "🔎 В меню поиска", callback_data: "menu:search" }],
-      ...backMain
-    ] }
+    { inline_keyboard: keyboard }
   );
 }
-
 async function profileScreen(userId: number, chatId: number) {
   const [profiles, history, favorites, referrals] = await Promise.all([
     db("profiles?select=telegram_username,first_name,created_at,premium_until,premium_referral_days,referral_code,bonus_searches&telegram_id=eq." + userId + "&limit=1"),

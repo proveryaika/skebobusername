@@ -244,12 +244,10 @@ async function runSearch(userId: number, chatId: number, mode: string, options: 
     inline_keyboard: [[{ text: "Отмена", callback_data: "menu:search" }], ...backMain],
   });
   const checked: string[] = [];
-  for (let i = 0; i < candidates.length && checked.length < 5; i += 3) {
-    const results = await Promise.all(candidates.slice(i, i + 3).map(async (name) => ({
-      name, free: await checkPublicUsernameAvailability(name),
-    })));
-    for (const result of results) if (result.free && !checked.includes(result.name)) checked.push(result.name);
-    if (i + 3 < candidates.length && checked.length < 5) await new Promise((resolve) => setTimeout(resolve, 350));
+  for (let i = 0; i < candidates.length && checked.length < 1; i++) {
+    const name = candidates[i];
+    if (await checkPublicUsernameAvailability(name)) checked.push(name);
+    if (i + 1 < candidates.length && checked.length < 1) await new Promise((resolve) => setTimeout(resolve, 350));
   }
 
   const queryText = options.query ?? (mode === "length_5" || mode === "length_6" ? (options.digits ? "с цифрами" : "только буквы") : mode);
@@ -273,14 +271,12 @@ async function runSearch(userId: number, chatId: number, mode: string, options: 
     );
     return;
   }
-  const rows = checked.map((username) => {
-    const score = Math.min(10, Math.max(5, 6 + (/[0-9]/.test(username) ? 0 : 1) + (username.length <= 6 ? 1 : 0)));
-    return "🟢 @" + username + " · " + username.length + " симв. · оценка " + score + "/10";
-  });
-  const keyboard: any[] = checked.map((username) => [
+  const username = checked[0];
+  const score = Math.min(10, Math.max(5, 6 + (/[0-9]/.test(username) ? 0 : 1) + (username.length <= 6 ? 1 : 0)));
+  const keyboard: any[] = [[
     { text: "@" + username, url: "https://t.me/" + username },
-    { text: "⭐", callback_data: "fav:add:" + username },
-  ]);
+    { text: "⭐ В избранное", callback_data: "fav:add:" + username },
+  ]];
   keyboard.push([{ text: "🔄 Найти ещё", callback_data: againCallback }], [{ text: "🔎 В меню поиска", callback_data: "menu:search" }], ...backMain);
   await show(chatId,
     "✅ КАНДИДАТЫ, ПРОШЕДШИЕ ПРОВЕРКУ\n━━━━━━━━━━━━━━\n\n" +

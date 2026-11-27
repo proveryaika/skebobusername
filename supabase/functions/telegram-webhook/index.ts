@@ -757,6 +757,21 @@ async function handleMessage(message: any) {
   const chatId = message.chat.id;
   const text = String(message.text ?? "").trim();
   if (message.successful_payment) return await handleSuccessfulStarsPayment(message);
+  if (text === "/refreshwebhook") {
+    if (userId !== BOT_OWNER_ID) {
+      await show(chatId, "⛔ Нет доступа.", mainKeyboardFor(userId));
+      return;
+    }
+    await telegram("setWebhook", {
+      url: SUPABASE_URL + "/functions/v1/telegram-webhook?forceFunctionRegion=eu-west-2",
+      secret_token: WEBHOOK_SECRET,
+      allowed_updates: ["message", "callback_query", "pre_checkout_query"],
+      drop_pending_updates: false,
+      max_connections: 1,
+    });
+    await show(chatId, "✅ Webhook обновлён. Проверки будут выполняться в одном регионе и последовательно.", mainKeyboardFor(userId));
+    return;
+  }
   if (text.startsWith("/start")) return await handleStart(message);
   const session = await getSession(userId);
   if (!session) {

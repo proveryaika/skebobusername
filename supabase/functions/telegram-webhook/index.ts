@@ -5,6 +5,9 @@ const WEBHOOK_SECRET = Deno.env.get("TELEGRAM_WEBHOOK_SECRET") ?? "";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const TONCENTER_API_KEY = Deno.env.get("TONCENTER_API_KEY") ?? "";
+const TELEGRAM_API_ID = Number(Deno.env.get("TELEGRAM_API_ID") ?? 0);
+const TELEGRAM_API_HASH = Deno.env.get("TELEGRAM_API_HASH") ?? "";
+const TELEGRAM_SESSION_STRING = Deno.env.get("TELEGRAM_SESSION_STRING") ?? "";
 const GRAM_RECEIVE_ADDRESS = "UQDVnyA5v_uLgb7lh_JRe5RfPVhj0MebqrRt0LdlJkavsQuP";
 
 const BOT_OWNER_ID = 8032877285;
@@ -194,27 +197,55 @@ async function handleStart(message: any) {
   await show(chatId, "👋 Привет, " + (user.first_name ?? "друг") + "!\n\nДобро пожаловать в Skebob Username.\nВыбери раздел 👇", mainKeyboardFor(user.id));
 }
 
-async function checkPublicUsernameAvailability(username: string): Promise<boolean> {
-  const name = username.toLowerCase();
-  if (!/^[a-z][a-z0-9_]{4,31}$/.test(name) || name.endsWith("_") || name.includes("__")) return false;
-  const headers = { "User-Agent": "Mozilla/5.0 (compatible; UsernameAvailabilityCheck/1.0)" };
-  try {
-    const [tgResponse, fragmentResponse] = await Promise.all([
-      fetch("https://t.me/" + encodeURIComponent(name), { headers, signal: AbortSignal.timeout(7000) }),
-      fetch("https://fragment.com/username/" + encodeURIComponent(name), { headers, signal: AbortSignal.timeout(7000) }),
-    ]);
-    if (!tgResponse.ok || !fragmentResponse.ok) return false;
-    const [tgHtml, fragmentHtml] = await Promise.all([tgResponse.text(), fragmentResponse.text()]);
-    if (/captcha|cloudflare|just a moment|too many requests/i.test(tgHtml + fragmentHtml)) return false;
-    if (/tgme_page_title|tgme_page_extra/.test(tgHtml)) return false;
-    const titleMatch = fragmentHtml.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-    if (!titleMatch) return false;
-    const title = titleMatch[1].replace(/&[^;]+;/g, " ").toLowerCase();
-    if (title.includes(name)) return false;
-    return true;
-  } catch {
-    return false;
+async function findOfficialAvailableUsername(candidates: string[]): Promise<string | null> {
+  if (!Number.isSafeInteger(TELEGRAM_API_ID) || TELEGRAM_API_ID <= 0 ||
+      !TELEGRAM_API_HASH || !TELEGRAM_SESSION_STRING) {
+    throw new Error("Официальная проверка ещё не настроена: отсутствует TELEGRAM_SESSION_STRING или API-ключи.");
   }
+
+  const [{ TelegramClient }, { MemoryStorage }, { convertFromTelethonSession }] = await Promise.all([
+    import("jsr:@mtcute/deno@0.32.8"),
+    import("jsr:@mtcute/core@0.32.8"),
+    import("jsr:@mtcute/convert@0.32.3"),
+  ]);
+
+  const client = new TelegramClient({
+    apiId: TELEGRAM_API_ID,
+    apiHash: TELEGRAM_API_HASH,
+    storage: new MemoryStorage(),
+  });
+
+  try {
+    await client.importSession(convertFromTelethonSession(TELEGRAM_SESSION_STRING));
+    await client.connect();
+
+    for (const username of candidates.slice(0, 30)) {
+      try {
+        const available = await client.call({
+          _: "account.checkUsername",
+          username,
+        });
+        if (available === true) return username;
+      } catch (error) {
+        const message = String((error as Error)?.message ?? error);
+        if (/USERNAME_(?:INVALID|OCCUPIED|PURCHASE_AVAILABLE)/i.test(message)) {
+          // Purchased Fragment usernames are not treated as free.
+        } else {
+          throw new Error("Официальная проверка Telegram не прошла: " + message);
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 450));
+    }
+    return null;
+  } finally {
+    await client.disconnect().catch(() => {});
+  }
+}
+
+function againSearchCallback(mode: string, digits: boolean): string {
+  if (mode === "word") return "search:again:word:0";
+  if (mode === "mask") return "search:again:mask:0";
+  return "search:again:" + mode + ":" + (digits ? "1" : "0");
 }
 
 async function runSearch(userId: number, chatId: number, mode: string, options: { digits?: boolean; query?: string } = {}) {
@@ -240,14 +271,22 @@ async function runSearch(userId: number, chatId: number, mode: string, options: 
     return;
   }
 
-  await show(chatId, "🔎 Проверяю кандидатов в Telegram и Fragment. Покажу только прошедшие обе проверки…", {
+  await show(chatId, "🔎 Проверяю кандидатов через официальный API Telegram…", {
     inline_keyboard: [[{ text: "Отмена", callback_data: "menu:search" }], ...backMain],
   });
   const checked: string[] = [];
-  for (let i = 0; i < candidates.length && checked.length < 1; i++) {
-    const name = candidates[i];
-    if (await checkPublicUsernameAvailability(name)) checked.push(name);
-    if (i + 1 < candidates.length && checked.length < 1) await new Promise((resolve) => setTimeout(resolve, 350));
+  try {
+    const found = await findOfficialAvailableUsername(candidates);
+    if (found) checked.push(found);
+  } catch (error) {
+    await clearSession(userId);
+    await show(chatId,
+      "⚠️ ОФИЦИАЛЬНАЯ ПРОВЕРКА НЕДОСТУПНА\n\n" +
+      (error as Error).message +
+      "\n\nЯ не буду показывать непроверенные варианты как свободные. Проверь настройки и попробуй позже.",
+      { inline_keyboard: [[{ text: "🔄 Повторить", callback_data: againSearchCallback(mode, options.digits ?? false) }], ...backMain] }
+    );
+    return;
   }
 
   const queryText = options.query ?? (mode === "length_5" || mode === "length_6" ? (options.digits ? "с цифрами" : "только буквы") : mode);
@@ -281,7 +320,7 @@ async function runSearch(userId: number, chatId: number, mode: string, options: 
   await show(chatId,
     "✅ НАЙДЕН ОДИН КАНДИДАТ\n━━━━━━━━━━━━━━\n\n" +
     "🟢 @" + username + " · " + username.length + " симв. · оценка " + score + "/10" +
-    "\n\n🔍 Проверены по публичным страницам Telegram и Fragment. Это не официальный метод Telegram; статус может измениться, поэтому попробуй сразу установить выбранное имя.\n\n" +
+    "\n\n🔍 Доступность подтверждена официальным методом Telegram account.checkUsername. Статус может измениться, поэтому попробуй сразу установить выбранное имя.\n\n" +
     remaining,
     { inline_keyboard: keyboard }
   );
@@ -985,8 +1024,9 @@ Deno.serve(async (req: Request) => {
     const response = await fetch("https://api.telegram.org/bot" + BOT_TOKEN + "/setWebhook", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        url: SUPABASE_URL + "/functions/v1/telegram-webhook", secret_token: WEBHOOK_SECRET,
+        url: SUPABASE_URL + "/functions/v1/telegram-webhook?forceFunctionRegion=eu-west-2", secret_token: WEBHOOK_SECRET,
         allowed_updates: ["message", "callback_query", "pre_checkout_query"], drop_pending_updates: false,
+        max_connections: 1,
       }),
     });
     const result = await response.json();

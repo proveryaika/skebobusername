@@ -140,12 +140,23 @@ async function handleMtprotoAuthMessage(chatId: number, text: string, state: any
         await finishMtprotoAuthorization(tg, chatId);
         return;
       }
+      // Log only Telegram's delivery metadata; never log phone numbers, codes or session data.
+      console.info("MTProto sendCode delivery", {
+        type: String((sent as any).type ?? "unknown"),
+        nextType: String((sent as any).nextType ?? "unknown"),
+        timeout: Number((sent as any).timeout ?? 0),
+      });
       const session = await tg.exportSession();
       const ciphertext = await encryptMtprotoPayload({ session, phone, phoneCodeHash: sent.phoneCodeHash });
       await saveMtprotoState("await_code", ciphertext);
-      await show(chatId, "📩 Telegram отправил код подтверждения. Открой сообщение от 777000 и введи сюда только код. Бот удалит сообщение с кодом после получения.", { inline_keyboard: [[{ text: "Отмена", callback_data: "mtproto:cancel" }], ...backMain] });
-    } catch (_error) {
-      await show(chatId, "⚠️ Не получилось запросить код Telegram. Проверь номер и попробуй снова через /mtlogin. Подробности и секреты не выводятся в чат.", mainKeyboardFor(BOT_OWNER_ID));
+      await show(chatId,
+        "📩 Telegram принял запрос на вход. Способ и место доставки выбирает сам Telegram — бот не может назначить отправителя или принудительно выбрать чат.\n\nПроверь официальные уведомления Telegram внутри приложения. Не ориентируйся только на имя или номер отправителя. Если код не появился, напиши /mtstatus и сообщи мне.",
+        { inline_keyboard: [[{ text: "Отмена", callback_data: "mtproto:cancel" }], ...backMain] });
+    } catch (error) {
+      const raw = String((error as Error)?.message ?? error);
+      const safe = raw.match(/PHONE_NUMBER_INVALID|PHONE_NUMBER_BANNED|PHONE_PASSWORD_FLOOD|PHONE_NUMBER_FLOOD|API_ID_INVALID|API_HASH_INVALID|FLOOD_WAIT_\\d+|NETWORK_MIGRATE_\\d+|PHONE_CODE_EXPIRED|AUTH_RESTART|CONNECTION\\w*/)?.[0] ?? "UNKNOWN_ERROR";
+      console.error("MTProto sendCode failed:", safe);
+      await show(chatId, "⚠️ Telegram не смог отправить запрос на код. Причина: " + safe + ". Не запрашивай код многократно; попробуй позже или пришли мне этот текст ошибки.", mainKeyboardFor(BOT_OWNER_ID));
     } finally {
       await tg.disconnect().catch(() => {});
     }

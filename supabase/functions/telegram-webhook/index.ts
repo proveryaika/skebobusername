@@ -76,7 +76,12 @@ async function runMtprotoQrLogin(chatId: number) {
         console.info("MTProto QR refreshed", { expiresAt: expires.toISOString() });
       },
       onQrScanned: async () => {
+        console.info("MTProto QR scanned; waiting for Telegram authorization");
         await show(chatId, "📲 QR отсканирован. Telegram подтверждает вход…", { inline_keyboard: [[{ text: "Отмена", callback_data: "mtproto:cancel" }]] });
+      },
+      invalidPasswordCallback: async () => {
+        await saveMtprotoState("await_qr_password", await encryptMtprotoPayload({ qrPassword: null }));
+        await show(chatId, "❌ Telegram не принял пароль 2FA. Попробуй ввести пароль ещё раз в этом личном чате с ботом.", { inline_keyboard: [[{ text: "Отмена", callback_data: "mtproto:cancel" }]] });
       },
       password: async () => {
         await saveMtprotoState("await_qr_password", await encryptMtprotoPayload({ qrPassword: null }));
@@ -93,6 +98,7 @@ async function runMtprotoQrLogin(chatId: number) {
         throw new Error("QR_LOGIN_TIMEOUT");
       },
     });
+    console.info("MTProto QR authorization completed; persisting session");
     const state = await getMtprotoState();
     if (state?.auth_stage === "disconnected") {
       await show(chatId, "Подключение отменено. Повтори /mtlogin, если захочешь начать заново.", mainKeyboardFor(BOT_OWNER_ID));

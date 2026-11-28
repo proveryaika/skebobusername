@@ -136,6 +136,10 @@ async function handleMtprotoAuthMessage(chatId: number, text: string, state: any
     const tg = newMtprotoClient();
     try {
       const sent = await tg.sendCode({ phone });
+      if (!("phoneCodeHash" in sent)) {
+        await finishMtprotoAuthorization(tg, chatId);
+        return;
+      }
       const session = await tg.exportSession();
       const ciphertext = await encryptMtprotoPayload({ session, phone, phoneCodeHash: sent.phoneCodeHash });
       await saveMtprotoState("await_code", ciphertext);

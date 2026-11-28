@@ -384,7 +384,8 @@ function generateFromMask(maskInput: string, count = 1): string[] {
 function generateTrap(count = 1): string[] {
   const parts = ["ghost", "vibe", "dark", "wave", "flex", "nova", "byte", "zero", "void", "echo", "rare", "moon"];
   const results: string[] = [];
-  for (const part of parts) {
+  while (results.length < count) {
+    const part = pick(parts);
     const suffix = pick("abcdefghijklmnopqrstuvwxyz") + pick("0123456789");
     results.push((part + suffix).slice(0, 7));
   }
@@ -458,7 +459,7 @@ async function findFreeUsername(candidates: string[]): Promise<string | null> {
       await saveMtprotoState("disconnected", null);
       throw new Error("Подключённый Telegram-аккаунт не совпадает с аккаунтом владельца. Повтори /mtlogin.");
     }
-    for (const username of candidates.slice(0, 60)) {
+    for (const username of candidates.slice(0, 120)) {
       if (!/^[a-z][a-z0-9_]{4,31}$/.test(username)) continue;
       try {
         const available = await tg.call({ _: "account.checkUsername", username });
@@ -467,7 +468,7 @@ async function findFreeUsername(candidates: string[]): Promise<string | null> {
         const message = String((error as Error)?.message ?? error);
         if (!/USERNAME_(?:INVALID|OCCUPIED|PURCHASE_AVAILABLE)/.test(message)) throw error;
       }
-      await new Promise((resolve) => setTimeout(resolve, 350));
+      await new Promise((resolve) => setTimeout(resolve, 250));
     }
     return null;
   } finally {
@@ -485,13 +486,13 @@ async function runSearch(userId: number, chatId: number, mode: string, options: 
   let candidates: string[];
   const searchMode = await getSearchMode(userId);
   if (mode === "length_5") candidates = searchMode === "readable" && !options.digits
-    ? unique(Array.from({ length: 60 }, () => generateReadable(5))) : generateByLength(5, options.digits ?? false, 60);
+    ? unique(Array.from({ length: 120 }, () => generateReadable(5))) : generateByLength(5, options.digits ?? false, 120);
   else if (mode === "length_6") candidates = searchMode === "readable" && !options.digits
-    ? unique(Array.from({ length: 60 }, () => generateReadable(6))) : generateByLength(6, options.digits ?? false, 60);
-  else if (mode === "word") candidates = generateFromWord(options.query ?? "", 60);
-  else if (mode === "mask") candidates = generateFromMask(options.query ?? "", 60);
+    ? unique(Array.from({ length: 120 }, () => generateReadable(6))) : generateByLength(6, options.digits ?? false, 120);
+  else if (mode === "word") candidates = generateFromWord(options.query ?? "", 120);
+  else if (mode === "mask") candidates = generateFromMask(options.query ?? "", 120);
   else candidates = searchMode === "readable"
-    ? unique(Array.from({ length: 60 }, () => generateReadable(6))) : generateTrap(30);
+    ? unique(Array.from({ length: 60 }, () => generateReadable(6))) : generateTrap(120);
 
   const quota = await db("rpc/consume_daily_search", "POST", {
     p_telegram_id: userId, p_mode: mode, p_include_digits: options.digits ?? null,
@@ -504,7 +505,7 @@ async function runSearch(userId: number, chatId: number, mode: string, options: 
     return;
   }
 
-  await show(chatId, "🔎 Проверяю публичные страницы Telegram…", {
+  await show(chatId, "🔎 Проверяю варианты через официальный метод Telegram…", {
     inline_keyboard: [[{ text: "Отмена", callback_data: "menu:search" }], ...backMain],
   });
   const checked: string[] = [];

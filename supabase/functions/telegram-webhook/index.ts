@@ -139,7 +139,7 @@ async function handleMtprotoAuthMessage(chatId: number, text: string, state: any
       const session = await tg.exportSession();
       const ciphertext = await encryptMtprotoPayload({ session, phone, phoneCodeHash: sent.phoneCodeHash });
       await saveMtprotoState("await_code", ciphertext);
-      await show(chatId, "📩 Telegram отправил код подтверждения. Открой сообщение от 777000 и введи сюда только код. Не отправляй его никому, кроме этого личного чата с ботом.", { inline_keyboard: [[{ text: "Отмена", callback_data: "mtproto:cancel" }], ...backMain] });
+      await show(chatId, "📩 Telegram отправил код подтверждения. Открой сообщение от 777000 и введи сюда только код. Бот удалит сообщение с кодом после получения.", { inline_keyboard: [[{ text: "Отмена", callback_data: "mtproto:cancel" }], ...backMain] });
     } catch (_error) {
       await show(chatId, "⚠️ Не получилось запросить код Telegram. Проверь номер и попробуй снова через /mtlogin. Подробности и секреты не выводятся в чат.", mainKeyboardFor(BOT_OWNER_ID));
     } finally {
@@ -409,7 +409,7 @@ async function runSearch(userId: number, chatId: number, mode: string, options: 
   } catch (error) {
     await clearSession(userId);
     await show(chatId,
-      "⚠️ ПУБЛИЧНАЯ ПРОВЕРКА НЕ УДАЛАСЬ\n\n" +
+      "⚠️ ПРОВЕРКА TELEGRAM НЕ УДАЛАСЬ\n\n" +
       (error as Error).message +
       "\n\nПубличная проверка не гарантирует доступность имени. Проверь настройки и попробуй позже.",
       { inline_keyboard: [[{ text: "🔄 Повторить", callback_data: againSearchCallback(mode, options.digits ?? false) }], ...backMain] }
@@ -433,7 +433,7 @@ async function runSearch(userId: number, chatId: number, mode: string, options: 
   const againCallback = mode === "word" ? "search:again:word:0" : mode === "mask" ? "search:again:mask:0" : "search:again:" + mode + ":" + (options.digits ? "1" : "0");
   if (!checked.length) {
     await show(chatId,
-      "😕 Сейчас не удалось найти ни одного имени, который публичная проверка пометила как вероятно свободный.\n\nЯ не буду показывать непроверенные варианты как свободные. Попробуй ещё раз чуть позже.\n\n" + remaining,
+      "😕 Среди проверенных вариантов Telegram не подтвердил ни одного свободного имени. Непроверенные варианты я не показываю.\n\nПопробуй новый поиск с другими вариантами.\n\n" + remaining,
       { inline_keyboard: [[{ text: "🔄 Проверить ещё", callback_data: againCallback }], [{ text: "🔎 В меню поиска", callback_data: "menu:search" }], ...backMain] }
     );
     return;
@@ -448,7 +448,7 @@ async function runSearch(userId: number, chatId: number, mode: string, options: 
   await show(chatId,
     "✅ НАЙДЕН ОДИН КАНДИДАТ\n━━━━━━━━━━━━━━\n\n" +
     "🟢 @" + username + " · " + username.length + " симв. · оценка " + score + "/10" +
-    "\n\n🔍 Публичная страница Telegram не найдена — имя может быть свободно, но это не гарантия. Проверь доступность непосредственно в Telegram перед использованием. Статус может измениться, поэтому попробуй сразу установить выбранное имя.\n\n" +
+    "\n\n✅ Telegram подтвердил, что имя свободно на момент проверки. Доступность может измениться, поэтому попробуй сразу установить его в Telegram.\n\n" +
     remaining,
     { inline_keyboard: keyboard }
   );
@@ -935,6 +935,9 @@ async function handleMessage(message: any) {
   if (userId === BOT_OWNER_ID && message.chat.type === "private") {
     const mtState = await getMtprotoState();
     if (mtState && ["await_phone", "await_code", "await_password"].includes(mtState.auth_stage)) {
+      if (["await_code", "await_password"].includes(mtState.auth_stage) && message.message_id) {
+        await telegram("deleteMessage", { chat_id: chatId, message_id: message.message_id }).catch(() => null);
+      }
       await handleMtprotoAuthMessage(chatId, text, mtState);
       return;
     }

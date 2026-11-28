@@ -21,7 +21,7 @@ const baseMainKeyboard = [
 function mainKeyboardFor(userId: number) {
   return { inline_keyboard: [
     ...baseMainKeyboard,
-    ...(userId === BOT_OWNER_ID ? [[{ text: "🛠 Выдать премиум по ID", callback_data: "admin:premium" }]] : []),
+    ...(userId === BOT_OWNER_ID ? [[{ text: "🛠 Выдать премиум по ID", callback_data: "admin:premium" }], [{ text: "🎟 Создать промокод", callback_data: "admin:promo:create" }]] : []),
   ] };
 }
 const backMain = [[{ text: "Главное меню", callback_data: "menu:home" }]];
@@ -559,6 +559,16 @@ async function runSearch(userId: number, chatId: number, mode: string, options: 
     { inline_keyboard: keyboard }
   );
 }
+async function showPromoMenu(userId: number, chatId: number, messageId?: number) {
+  const text = "🎟 ПРОМОКОДЫ\n━━━━━━━━━━━━━━\n\nВведи промокод, чтобы получить Premium. Каждый код можно активировать только один раз на аккаунт, а общее число активаций ограничено создателем.";
+  const markup = { inline_keyboard: [
+    [{ text: "🎁 Активировать промокод", callback_data: "promo:redeem" }],
+    ...(userId === BOT_OWNER_ID ? [[{ text: "➕ Создать промокод", callback_data: "admin:promo:create" }]] : []),
+    [{ text: "⬅️ В профиль", callback_data: "menu:profile" }], ...backMain,
+  ]};
+  if (messageId) await editScreen(chatId, messageId, text, markup);
+  else await show(chatId, text, markup);
+}
 async function profileScreen(userId: number, chatId: number) {
   const [profiles, history, favorites, referrals] = await Promise.all([
     db("profiles?select=telegram_username,first_name,created_at,premium_until,premium_referral_days,referral_code,bonus_searches&telegram_id=eq." + userId + "&limit=1"),
@@ -585,6 +595,8 @@ async function profileScreen(userId: number, chatId: number) {
   await show(chatId, text, { inline_keyboard: [
     [{ text: "📜 История поиска", callback_data: "profile:history" }, { text: "⭐ Избранное", callback_data: "profile:favorites" }],
     [{ text: "👥 Мои рефералы", callback_data: "menu:referrals" }],
+    [{ text: "🎟 Промокоды", callback_data: "promo:menu" }],
+    ...(userId === BOT_OWNER_ID ? [[{ text: "➕ Создать промокод", callback_data: "admin:promo:create" }]] : []),
     ...backMain,
   ]});
 }
@@ -1094,6 +1106,76 @@ async function handleMessage(message: any) {
       });
       return;
     }
+    else if (session.state === "await_admin_promo_uses") {
+      const uses = Number(text);
+      if (!/^\\d+$/.test(text) || !Number.isSafeInteger(uses) || uses < 1 || uses > 100000) {
+        await show(chatId, "Введи целое число активаций от 1 до 100000.", { inline_keyboard: [[{ text: "Отмена", callback_data: "admin:promo:cancel" }], ...backMain] });
+        return;
+      }
+      await setSession(userId, "await_admin_promo_unit", { max_uses: uses });
+      await show(chatId, "⏱ Выбери, в чём указать длительность Premium:", { inline_keyboard: [
+        [{ text: "📅 В днях", callback_data: "admin:promo:unit:days" }, { text: "⏱ В минутах", callback_data: "admin:promo:unit:minutes" }],
+        [{ text: "Отмена", callback_data: "admin:promo:cancel" }], ...backMain,
+      ]});
+      return;
+    }
+    else if (session.state === "await_admin_promo_duration") {
+      const amount = Number(text);
+      const unit = String(session.payload?.unit ?? "");
+      const maxUses = Number(session.payload?.max_uses);
+      const maxAmount = unit === "days" ? 365 : 525600;
+      if (!/^\\d+$/.test(text) || !Number.isSafeInteger(amount) || amount < 1 || amount > maxAmount || !Number.isSafeInteger(maxUses) || maxUses < 1) {
+        await show(chatId, "Введи целое число от 1 до " + maxAmount + ".", { inline_keyboard: [[{ text: "Отмена", callback_data: "admin:promo:cancel" }], ...backMain] });
+        return;
+      }
+      const durationMinutes = unit === "days" ? amount * 1440 : amount;
+      await setSession(userId, "await_admin_promo_code", { max_uses: maxUses, duration_minutes: durationMinutes });
+      await show(chatId, "🏷 Теперь придумай название промокода (3–32 символа: латинские буквы, цифры, _ или -).", { inline_keyboard: [[{ text: "Отмена", callback_data: "admin:promo:cancel" }], ...backMain] });
+      return;
+    }
+    else if (session.state === "await_admin_promo_code") {
+      const code = text.toUpperCase();
+      const maxUses = Number(session.payload?.max_uses);
+      const durationMinutes = Number(session.payload?.duration_minutes);
+      if (!/^[A-Z0-9_-]{3,32}$/.test(code) || !Number.isSafeInteger(maxUses) || !Number.isSafeInteger(durationMinutes)) {
+        await show(chatId, "Название должно быть 3–32 символа: латинские буквы, цифры, _ или -.", { inline_keyboard: [[{ text: "Отмена", callback_data: "admin:promo:cancel" }], ...backMain] });
+        return;
+      }
+      const existing = await db("promo_codes?select=code&code=eq." + encodeURIComponent(code) + "&limit=1");
+      if (Array.isArray(existing) && existing.length) {
+        await show(chatId, "Такой промокод уже существует. Введи другое название.", { inline_keyboard: [[{ text: "Отмена", callback_data: "admin:promo:cancel" }], ...backMain] });
+        return;
+      }
+      await db("promo_codes", "POST", { code, max_uses: maxUses, duration_minutes: durationMinutes, created_by: BOT_OWNER_ID });
+      await clearSession(userId);
+      const durationLabel = durationMinutes % 1440 === 0 ? (durationMinutes / 1440) + " дн." : durationMinutes + " мин.";
+      await show(chatId, "✅ ПРОМОКОД СОЗДАН\\n\\n🎟 " + code + "\\n👥 Активаций: " + maxUses + "\\n👑 Premium: " + durationLabel, {
+        inline_keyboard: [[{ text: "➕ Создать ещё", callback_data: "admin:promo:create" }], [{ text: "🎟 Промокоды", callback_data: "promo:menu" }], ...backMain],
+      });
+      return;
+    }
+    else if (session.state === "await_promo_redeem_code") {
+      const code = text.toUpperCase();
+      if (!/^[A-Z0-9_-]{3,32}$/.test(code)) {
+        await show(chatId, "Промокод должен содержать 3–32 символа: латинские буквы, цифры, _ или -.", { inline_keyboard: [[{ text: "🎟 Ввести ещё раз", callback_data: "promo:redeem" }], ...backMain] });
+        return;
+      }
+      const result = await db("rpc/redeem_promo_code", "POST", { p_code: code, p_telegram_id: userId });
+      await clearSession(userId);
+      const status = result?.status;
+      if (status === "ok") {
+        const duration = Number(result.duration_minutes);
+        const durationLabel = duration % 1440 === 0 ? (duration / 1440) + " дн." : duration + " мин.";
+        await show(chatId, "🎉 ПРОМОКОД АКТИВИРОВАН!\\n\\n👑 Premium добавлен: " + durationLabel + "\\n📅 Действует до: " + new Date(result.premium_until).toLocaleString("ru-RU"), { inline_keyboard: [[{ text: "👤 Мой профиль", callback_data: "menu:profile" }], ...backMain] });
+      } else {
+        const errorText = status === "not_found" ? "Такого промокода нет или он отключён."
+          : status === "already_used" ? "Ты уже активировал этот промокод."
+          : status === "exhausted" ? "Все активации этого промокода уже использованы."
+          : "Не удалось активировать промокод. Попробуй позже.";
+        await show(chatId, "❌ " + errorText, { inline_keyboard: [[{ text: "🎟 Попробовать ещё", callback_data: "promo:redeem" }], ...backMain] });
+      }
+      return;
+    }
     else if (session.state === "await_trap_username") {
       await createTrapFromInput(userId, chatId, text);
     }
@@ -1114,6 +1196,8 @@ async function handleMessage(message: any) {
     const retryCallback = session.state === "await_word" ? "mode:word"
       : session.state === "await_mask" ? "mode:mask"
       : session.state === "await_trap_username" ? "trap:add"
+      : session.state === "await_promo_redeem_code" ? "promo:redeem"
+      : session.state.startsWith("await_admin_promo_") ? "admin:promo:create"
       : session.state.startsWith("await_admin_") ? "admin:premium"
       : "premium:crypto";
     await show(chatId, (error as Error).message + "\n\nПопробуй ещё раз или вернись в меню.", {
@@ -1134,6 +1218,33 @@ async function handleCallback(callback: any) {
     if (userId !== BOT_OWNER_ID) return;
     await saveMtprotoState("disconnected", null);
     await editScreen(chatId, messageId, "Подключение отменено. Активную сессию Telegram можно отозвать в Настройки → Устройства.", { inline_keyboard: [[{ text: "В меню", callback_data: "menu:home" }], ...backMain] });
+    return;
+  }
+  if (data === "promo:menu") { await showPromoMenu(userId, chatId, messageId); return; }
+  if (data === "promo:redeem") {
+    await setSession(userId, "await_promo_redeem_code");
+    await editScreen(chatId, messageId, "🎟 ВВОД ПРОМОКОДА\\n\\nОтправь название промокода одним сообщением.", { inline_keyboard: [[{ text: "Отмена", callback_data: "promo:menu" }], ...backMain] });
+    return;
+  }
+  if (data === "admin:promo:create") {
+    if (userId !== BOT_OWNER_ID) return;
+    await setSession(userId, "await_admin_promo_uses");
+    await editScreen(chatId, messageId, "🎟 СОЗДАНИЕ ПРОМОКОДА\\n\\nСколько раз его можно будет активировать? Введи число от 1 до 100000.", { inline_keyboard: [[{ text: "Отмена", callback_data: "admin:promo:cancel" }], ...backMain] });
+    return;
+  }
+  if (data.startsWith("admin:promo:unit:")) {
+    if (userId !== BOT_OWNER_ID) return;
+    const session = await getSession(userId);
+    if (session?.state !== "await_admin_promo_unit") return;
+    const unit = data.endsWith(":days") ? "days" : "minutes";
+    await setSession(userId, "await_admin_promo_duration", { max_uses: Number(session.payload?.max_uses), unit });
+    await editScreen(chatId, messageId, unit === "days" ? "📅 На сколько дней Premium будет выдаваться? Введи число от 1 до 365." : "⏱ На сколько минут Premium будет выдаваться? Введи число от 1 до 525600.", { inline_keyboard: [[{ text: "Отмена", callback_data: "admin:promo:cancel" }], ...backMain] });
+    return;
+  }
+  if (data === "admin:promo:cancel") {
+    if (userId !== BOT_OWNER_ID) return;
+    await clearSession(userId);
+    await editScreen(chatId, messageId, "Создание промокода отменено.", { inline_keyboard: [[{ text: "🎟 Промокоды", callback_data: "promo:menu" }], ...backMain] });
     return;
   }
   if (data === "admin:premium") {

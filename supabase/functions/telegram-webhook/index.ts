@@ -16,6 +16,7 @@ const BOT_OWNER_ID = 8032877285;
 const baseMainKeyboard = [
   [{ text: "🔍 Поиск", callback_data: "menu:search" }],
   [{ text: "👤 Профиль", callback_data: "menu:profile" }, { text: "👥 Рефералы", callback_data: "menu:referrals" }],
+  [{ text: "🏆 Рейтинг недели", callback_data: "menu:leaderboard" }],
   [{ text: "👑 Премиум", callback_data: "menu:premium" }, { text: "💬 Поддержка", callback_data: "menu:support" }],
 ];
 function mainKeyboardFor(userId: number) {
@@ -595,6 +596,7 @@ async function profileScreen(userId: number, chatId: number) {
   await show(chatId, text, { inline_keyboard: [
     [{ text: "📜 История поиска", callback_data: "profile:history" }, { text: "⭐ Избранное", callback_data: "profile:favorites" }],
     [{ text: "👥 Мои рефералы", callback_data: "menu:referrals" }],
+    [{ text: "🏆 Рейтинг недели", callback_data: "menu:leaderboard" }],
     [{ text: "🎟 Промокоды", callback_data: "promo:menu" }],
     ...(userId === BOT_OWNER_ID ? [[{ text: "➕ Создать промокод", callback_data: "admin:promo:create" }]] : []),
     ...backMain,
@@ -616,11 +618,30 @@ async function showFavorites(userId: number, chatId: number) {
   const list = Array.isArray(rows) ? rows : [];
   const buttons = list.map((x: any) => [
     { text: "@" + x.username, url: "https://t.me/" + x.username },
-    { text: "✖", callback_data: "fav:remove:" + x.username },
+    { text: "✖ Удалить", callback_data: "fav:remove:" + x.username },
   ]);
-  await show(chatId, "⭐ ИЗБРАННОЕ\n\n" + (list.length ? "Сохранённые юзернеймы:" : "Пока ничего не сохранено."), {
+  await show(chatId, "⭐ ИЗБРАННОЕ\n━━━━━━━━━━━━━━\n\n" + (list.length ? "Сохранённые юзернеймы (" + list.length + "):" : "Пока ничего не сохранено. Добавляй ники кнопкой «⭐ В избранное» после успешного поиска."), {
     inline_keyboard: [...buttons, [{ text: "⬅️ В профиль", callback_data: "menu:profile" }], ...backMain],
   });
+}
+
+async function showWeeklyLeaderboard(userId: number, chatId: number) {
+  const result = await db("rpc/get_weekly_leaderboard", "POST", {});
+  const leaders = Array.isArray(result?.leaders) ? result.leaders : [];
+  const medals = ["🥇", "🥈", "🥉"];
+  const lines = leaders.map((entry: any, index: number) =>
+    (medals[index] ?? (String(index + 1) + ".")) + " " + String(entry.name ?? "Пользователь") +
+    (entry.username ? " (@" + entry.username + ")" : "") +
+    " — " + Number(entry.found_count ?? 0) + " найдено" +
+    (Number(entry.telegram_id) === userId ? "  ← ты" : "")
+  );
+  const myPlace = leaders.findIndex((entry: any) => Number(entry.telegram_id) === userId);
+  const text = "🏆 РЕЙТИНГ НЕДЕЛИ\n━━━━━━━━━━━━━━\n\n" +
+    (lines.length ? lines.join("\n") : "На этой неделе пока нет подтверждённых находок.") +
+    "\n\n🎁 Награда лидеру: 3 дня Premium. Если первое место делят несколько участников — награду получают все." +
+    "\n🕛 Новый сезон начинается каждый понедельник в 00:00 по Хельсинки." +
+    (myPlace < 0 ? "\n\nТебя пока нет в топ-10. Продолжай искать!" : "");
+  await show(chatId, text, { inline_keyboard: [[{ text: "🔄 Обновить рейтинг", callback_data: "menu:leaderboard" }], ...backMain] });
 }
 
 async function editScreen(chatId: number, messageId: number, text: string, reply_markup: unknown) {
@@ -1212,7 +1233,9 @@ async function handleCallback(callback: any) {
   const messageId = callback.message?.message_id;
   const userId = callback.from.id;
   if (!chatId || !messageId) return;
-  await telegram("answerCallbackQuery", { callback_query_id: callback.id });
+  await telegram("answerCallbackQuery", { callback_query_id: callback.id }).catch((error) => {
+    console.warn("Could not acknowledge Telegram callback; continuing action:", String((error as Error)?.message ?? error).slice(0, 180));
+  });
 
   if (data === "mtproto:cancel") {
     if (userId !== BOT_OWNER_ID) return;
@@ -1279,6 +1302,7 @@ async function handleCallback(callback: any) {
     await showMyTraps(userId, chatId);
     return;
   }
+  if (data === "menu:leaderboard") { await showWeeklyLeaderboard(userId, chatId); return; }
   if (data === "menu:support") {
     await editScreen(chatId, messageId,
       "💬 ПОДДЕРЖКА\n━━━━━━━━━━━━━━\n\nЕсли возник вопрос или нужна помощь — напиши напрямую:",

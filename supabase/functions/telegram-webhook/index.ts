@@ -22,7 +22,7 @@ const baseMainKeyboard = [
 function mainKeyboardFor(userId: number) {
   return { inline_keyboard: [
     ...baseMainKeyboard,
-    ...(userId === BOT_OWNER_ID ? [[{ text: "🛠 Выдать премиум по ID", callback_data: "admin:premium" }], [{ text: "🎟 Создать промокод", callback_data: "admin:promo:create" }]] : []),
+    ...(userId === BOT_OWNER_ID ? [[{ text: "👥 Пользователи", callback_data: "admin:users:0" }], [{ text: "🛠 Выдать премиум по ID", callback_data: "admin:premium" }], [{ text: "🎟 Создать промокод", callback_data: "admin:promo:create" }]] : []),
   ] };
 }
 const backMain = [[{ text: "Главное меню", callback_data: "menu:home" }]];
@@ -623,6 +623,30 @@ async function showFavorites(userId: number, chatId: number) {
   await show(chatId, "⭐ ИЗБРАННОЕ\n━━━━━━━━━━━━━━\n\n" + (list.length ? "Сохранённые юзернеймы (" + list.length + "):" : "Пока ничего не сохранено. Добавляй ники кнопкой «⭐ В избранное» после успешного поиска."), {
     inline_keyboard: [...buttons, [{ text: "⬅️ В профиль", callback_data: "menu:profile" }], ...backMain],
   });
+}
+
+async function showAdminUsers(userId: number, chatId: number, page = 0) {
+  if (userId !== BOT_OWNER_ID) return;
+  const pageSize = 10;
+  const offset = Math.max(0, page) * pageSize;
+  const result = await db("rpc/admin_list_bot_users", "POST", { p_limit: pageSize, p_offset: offset });
+  const users = Array.isArray(result?.users) ? result.users : [];
+  const total = Number(result?.total_users ?? 0);
+  const lines = users.map((u: any) =>
+    String(u.display_name ?? "Пользователь") + " — " +
+    (u.premium_active ? "активна" : "неактивна") + " — " +
+    Number(u.requests ?? 0)
+  );
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const buttons: any[] = [];
+  if (page > 0) buttons.push({ text: "⬅️ Назад", callback_data: "admin:users:" + (page - 1) });
+  if (page + 1 < pages) buttons.push({ text: "Вперёд ➡️", callback_data: "admin:users:" + (page + 1) });
+  await show(chatId,
+    "👥 ПОЛЬЗОВАТЕЛИ\\n━━━━━━━━━━━━━━\\n\\nВсего пользователей: " + total +
+    "\\n\\n" + (lines.length ? lines.join("\\n") : "Пользователей пока нет.") +
+    "\\n\\nСтатус подписки · количество запросов\\nСтраница " + (page + 1) + " из " + pages,
+    { inline_keyboard: [...(buttons.length ? [buttons] : []), [{ text: "🔄 Обновить", callback_data: "admin:users:" + page }], ...backMain] }
+  );
 }
 
 async function showWeeklyLeaderboard(userId: number, chatId: number) {
@@ -1247,6 +1271,16 @@ async function handleCallback(callback: any) {
   if (data === "promo:redeem") {
     await setSession(userId, "await_promo_redeem_code");
     await editScreen(chatId, messageId, "🎟 ВВОД ПРОМОКОДА\n\nОтправь название промокода одним сообщением.", { inline_keyboard: [[{ text: "Отмена", callback_data: "promo:menu" }], ...backMain] });
+    return;
+  }
+  if (data.startsWith("admin:users:")) {
+    if (userId !== BOT_OWNER_ID) {
+      await telegram("answerCallbackQuery", { callback_query_id: callback.id, text: "Нет доступа", show_alert: true }).catch(() => null);
+      return;
+    }
+    const requestedPage = Number(data.slice("admin:users:".length));
+    const page = Number.isSafeInteger(requestedPage) && requestedPage >= 0 ? requestedPage : 0;
+    await showAdminUsers(userId, chatId, page);
     return;
   }
   if (data === "admin:promo:create") {

@@ -1043,9 +1043,21 @@ async function createTrapFromInput(userId: number, chatId: number, raw: string) 
   }
 }
 
+async function syncTelegramUsername(user: any) {
+  if (!user?.id) return;
+  await db("profiles?on_conflict=telegram_id", "POST", {
+    telegram_id: user.id,
+    telegram_username: user.username ?? null,
+    first_name: user.first_name ?? null,
+    last_name: user.last_name ?? null,
+    language_code: user.language_code ?? null,
+  });
+}
+
 async function handleMessage(message: any) {
   const userId = message.from.id;
   const chatId = message.chat.id;
+  await syncTelegramUsername(message.from);
   const text = String(message.text ?? "").trim();
   if (message.successful_payment) return await handleSuccessfulStarsPayment(message);
   if (text === "/refreshwebhook") {
@@ -1257,6 +1269,7 @@ async function handleCallback(callback: any) {
   const messageId = callback.message?.message_id;
   const userId = callback.from.id;
   if (!chatId || !messageId) return;
+  await syncTelegramUsername(callback.from);
   await telegram("answerCallbackQuery", { callback_query_id: callback.id }).catch((error) => {
     console.warn("Could not acknowledge Telegram callback; continuing action:", String((error as Error)?.message ?? error).slice(0, 180));
   });

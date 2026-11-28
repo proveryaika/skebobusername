@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { TelegramClient, MemoryStorage } from "jsr:@mtcute/deno@0.32.8";
+import QRCode from "npm:qrcode@1.5.4";
 
 const BOT_TOKEN = Deno.env.get("BOT_TOKEN") ?? "";
 const WEBHOOK_SECRET = Deno.env.get("TELEGRAM_WEBHOOK_SECRET") ?? "";
@@ -44,6 +45,76 @@ async function telegram(method: string, body: Record<string, unknown>) {
   return data.result;
 }
 
+
+async function sendQrPhoto(chatId: number, url: string, oldMessageId?: number) {
+  const png = await QRCode.toBuffer(url, { type: "png", width: 512, margin: 2 });
+  const form = new FormData();
+  form.append("chat_id", String(chatId));
+  form.append("photo", new Blob([png], { type: "image/png" }), "telegram-login-qr.png");
+  form.append("caption", "🔐 QR для входа в Telegram\n\nОткрой Telegram на втором устройстве → Настройки → Устройства → Подключить устройство и отсканируй этот QR. Код обновляется автоматически.");
+  form.append("reply_markup", JSON.stringify({ inline_keyboard: [[{ text: "Отмена", callback_data: "mtproto:cancel" }]] }));
+  const response = await fetch("https://api.telegram.org/bot" + BOT_TOKEN + "/sendPhoto", { method: "POST", body: form });
+  const data = await response.json();
+  if (!response.ok || !data.ok) throw new Error("Telegram sendPhoto failed: " + String(data.description ?? response.status));
+  if (oldMessageId) await telegram("deleteMessage", { chat_id: chatId, message_id: oldMessageId }).catch(() => null);
+  return Number(data.result?.message_id ?? 0);
+}
+async function runMtprotoQrLogin(chatId: number) {
+  const tg = newMtprotoClient();
+  const controller = new AbortController();
+  const deadline = Date.now() + 105000;
+  const timeout = setTimeout(() => controller.abort(), 108000);
+  let qrMessageId = 0;
+  try {
+    await tg.signInQr({
+      abortSignal: controller.signal,
+      onUrlUpdated: async (url: string, expires: Date) => {
+        const current = await getMtprotoState();
+        if (current?.auth_stage === "disconnected") throw new Error("QR_LOGIN_CANCELLED");
+        qrMessageId = await sendQrPhoto(chatId, url, qrMessageId || undefined);
+        console.info("MTProto QR refreshed", { expiresAt: expires.toISOString() });
+      },
+      onQrScanned: async () => {
+        await show(chatId, "📲 QR отсканирован. Telegram подтверждает вход…", { inline_keyboard: [[{ text: "Отмена", callback_data: "mtproto:cancel" }]] });
+      },
+      password: async () => {
+        await saveMtprotoState("await_qr_password", await encryptMtprotoPayload({ qrPassword: null }));
+        await show(chatId, "🔐 QR подтверждён. У аккаунта включена двухэтапная защита — введи пароль 2FA в этом личном чате с ботом. Не присылай его сюда, в ChatGPT или кому-либо ещё.", { inline_keyboard: [[{ text: "Отмена", callback_data: "mtproto:cancel" }]] });
+        while (Date.now() < deadline) {
+          const state = await getMtprotoState();
+          if (state?.auth_stage !== "await_qr_password") throw new Error("QR_LOGIN_CANCELLED");
+          if (state.session_ciphertext) {
+            const payload = await decryptMtprotoPayload(state.session_ciphertext);
+            if (typeof payload.qrPassword === "string" && payload.qrPassword.length) return payload.qrPassword;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 1200));
+        }
+        throw new Error("QR_LOGIN_TIMEOUT");
+      },
+    });
+    const state = await getMtprotoState();
+    if (state?.auth_stage === "disconnected") {
+      await show(chatId, "Подключение отменено. Повтори /mtlogin, если захочешь начать заново.", mainKeyboardFor(BOT_OWNER_ID));
+      return;
+    }
+    await finishMtprotoAuthorization(tg, chatId);
+  } catch (error) {
+    const state = await getMtprotoState().catch(() => null);
+    if (state?.auth_stage !== "authorized" && state?.auth_stage !== "disconnected") {
+      await saveMtprotoState("disconnected", null).catch(() => null);
+      const message = String((error as Error)?.message ?? error);
+      const reason = message.includes("QR_LOGIN_TIMEOUT") || message.includes("AbortError")
+        ? "Время ожидания QR истекло. Запусти /mtlogin ещё раз."
+        : "Не удалось завершить QR-вход. Запусти /mtlogin ещё раз.";
+      await show(chatId, "⚠️ " + reason, mainKeyboardFor(BOT_OWNER_ID)).catch(() => null);
+      console.error("MTProto QR login failed:", message.slice(0, 180));
+    }
+  } finally {
+    clearTimeout(timeout);
+    if (qrMessageId) await telegram("deleteMessage", { chat_id: chatId, message_id: qrMessageId }).catch(() => null);
+    await tg.disconnect().catch(() => {});
+  }
+}
 async function db(path: string, method = "GET", body?: unknown) {
   const response = await fetch(SUPABASE_URL + "/rest/v1/" + path, {
     method,
@@ -127,6 +198,18 @@ async function finishMtprotoAuthorization(tg: any, chatId: number) {
   await show(chatId, "✅ Telegram-аккаунт подключён. Теперь поиск будет проверять доступность через официальный метод Telegram. Сессию сохранил в Supabase в зашифрованном виде.", mainKeyboardFor(BOT_OWNER_ID));
 }
 async function handleMtprotoAuthMessage(chatId: number, text: string, state: any) {
+  if (state.auth_stage === "await_qr_password") {
+    if (!text || text.length > 256) {
+      await show(chatId, "Введи пароль 2FA (до 256 символов) или нажми «Отмена».", { inline_keyboard: [[{ text: "Отмена", callback_data: "mtproto:cancel" }]] });
+      return;
+    }
+    const payload = state.session_ciphertext ? await decryptMtprotoPayload(state.session_ciphertext) : {};
+    payload.qrPassword = text;
+    await saveMtprotoState("await_qr_password", await encryptMtprotoPayload(payload));
+    await show(chatId, "🔐 Пароль передан для проверки Telegram. Подожди завершения подключения.", { inline_keyboard: [[{ text: "Отмена", callback_data: "mtproto:cancel" }]] });
+    return;
+  }
+
   if (state.auth_stage === "await_phone") {
     const phone = text.replace(/[\s()-]/g, "");
     if (!/^\+?[0-9]{7,15}$/.test(phone)) {
@@ -922,8 +1005,9 @@ async function handleMessage(message: any) {
     }
     try {
       assertMtprotoConfig();
-      await saveMtprotoState("await_phone", null);
-      await show(chatId, "🔐 Подключение Telegram-аккаунта\n\nОтправь номер телефона в международном формате. Telegram пришлёт код от 777000. Код и пароль 2FA вводи только в этом личном чате с ботом.", { inline_keyboard: [[{ text: "Отмена", callback_data: "mtproto:cancel" }], ...backMain] });
+      await saveMtprotoState("qr_pending", null);
+      await show(chatId, "🔐 Готовлю QR для подключения. Сейчас пришлю изображение — отсканируй его через Telegram на втором устройстве.", { inline_keyboard: [[{ text: "Отмена", callback_data: "mtproto:cancel" }], ...backMain] });
+      EdgeRuntime.waitUntil(runMtprotoQrLogin(chatId));
     } catch (_error) {
       await show(chatId, "⚠️ Не настроены секреты MTProto или ключ шифрования. Добавь TELEGRAM_SESSION_ENCRYPTION_KEY в Supabase Secrets (не менее 32 символов), затем повтори /mtlogin.", mainKeyboardFor(userId));
     }
@@ -933,6 +1017,8 @@ async function handleMessage(message: any) {
     if (userId !== BOT_OWNER_ID || message.chat.type !== "private") return;
     const state = await getMtprotoState();
     const status = state?.auth_stage === "authorized" ? "✅ Аккаунт подключён"
+      : state?.auth_stage === "qr_pending" ? "⏳ Подготавливается QR"
+      : state?.auth_stage === "await_qr_password" ? "⏳ Ожидается пароль 2FA после QR"
       : state?.auth_stage === "await_code" ? "⏳ Ожидается код Telegram"
       : state?.auth_stage === "await_password" ? "⏳ Ожидается пароль 2FA"
       : state?.auth_stage === "await_phone" ? "⏳ Ожидается номер телефона"
@@ -949,8 +1035,8 @@ async function handleMessage(message: any) {
   if (text.startsWith("/start")) return await handleStart(message);
   if (userId === BOT_OWNER_ID && message.chat.type === "private") {
     const mtState = await getMtprotoState();
-    if (mtState && ["await_phone", "await_code", "await_password"].includes(mtState.auth_stage)) {
-      if (["await_code", "await_password"].includes(mtState.auth_stage) && message.message_id) {
+    if (mtState && ["await_phone", "await_code", "await_password", "await_qr_password"].includes(mtState.auth_stage)) {
+      if (["await_code", "await_password", "await_qr_password"].includes(mtState.auth_stage) && message.message_id) {
         await telegram("deleteMessage", { chat_id: chatId, message_id: message.message_id }).catch(() => null);
       }
       await handleMtprotoAuthMessage(chatId, text, mtState);

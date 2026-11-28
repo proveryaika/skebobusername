@@ -62,8 +62,9 @@ async function sendQrPhoto(chatId: number, url: string, oldMessageId?: number) {
 async function runMtprotoQrLogin(chatId: number) {
   const tg = newMtprotoClient();
   const controller = new AbortController();
-  const deadline = Date.now() + 105000;
-  const timeout = setTimeout(() => controller.abort(), 108000);
+  // Supabase Free background tasks have a 150s wall-clock ceiling; leave headroom for startup and cleanup.
+  const deadline = Date.now() + 130000;
+  const timeout = setTimeout(() => controller.abort(), 135000);
   let qrMessageId = 0;
   try {
     await tg.signInQr({
@@ -103,7 +104,7 @@ async function runMtprotoQrLogin(chatId: number) {
     if (state?.auth_stage !== "authorized" && state?.auth_stage !== "disconnected") {
       await saveMtprotoState("disconnected", null).catch(() => null);
       const message = String((error as Error)?.message ?? error);
-      const reason = message.includes("QR_LOGIN_TIMEOUT") || message.includes("AbortError")
+      const reason = message.includes("QR_LOGIN_TIMEOUT") || message.includes("AbortError") || message.includes("signal has been aborted")
         ? "Время ожидания QR истекло. Запусти /mtlogin ещё раз."
         : "Не удалось завершить QR-вход. Запусти /mtlogin ещё раз.";
       await show(chatId, "⚠️ " + reason, mainKeyboardFor(BOT_OWNER_ID)).catch(() => null);

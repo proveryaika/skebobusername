@@ -444,7 +444,7 @@ async function handleStart(message: any) {
     }
   }
   await clearSession(user.id);
-  await show(chatId, "👋 Привет, " + (user.first_name ?? "друг") + "!\n\nДобро пожаловать в Skebob Username.\nВыбери раздел 👇", mainKeyboardFor(user.id));
+  await show(chatId, "🔍 UsernameHunt — главное меню\n━━━━━━━━━━━━━━\n\nВыберите раздел 👇", mainKeyboardFor(user.id));
 }
 
 async function findFreeUsername(candidates: string[]): Promise<string | null> {
@@ -985,7 +985,7 @@ async function showReferrals(userId: number, chatId: number) {
 
 
 async function showTrapMenu(chatId: number, messageId?: number) {
-  const text = "🎯 Ловушка\n━━━━━━━━━━━━━━\n\n💡 Понравился ник, но он занят?\nПоставь ловушку — я сохраню его и покажу в твоём списке.\n\n⏳ До 3 активных ловушек · срок 7 дней";
+  const text = "🎯 Ловушка для юзернейма\n━━━━━━━━━━━━━━\n\n💡 Нашёл занятый ник, который хочешь отслеживать?\nПоставь ловушку — бот сохранит его и будет проверять доступность.\n\n⏳ До 3 активных ловушек · срок 7 дней\n\n👇 Выбери действие";
   const markup = { inline_keyboard: [
     [{ text: "🎯 Поставить ловушку", callback_data: "trap:add" }],
     [{ text: "📋 Мои ловушки", callback_data: "trap:list" }],
@@ -1429,16 +1429,16 @@ async function handleCallback(callback: any) {
   let view: { text: string; reply_markup: unknown } | null = null;
   switch (data) {
     case "menu:home":
-      view = screen("Skebob Username — главное меню\n\nВыбери раздел 👇", mainKeyboardFor(userId)); break;
+      view = screen("🔍 UsernameHunt — главное меню\n━━━━━━━━━━━━━━\n\nВыберите раздел 👇", mainKeyboardFor(userId)); break;
     case "menu:search":
-      view = screen("🔍 ПОИСК ЮЗЕРНЕЙМОВ\n\nВыбери способ подбора:", searchKeyboard); break;
+      view = screen("🔍 Поиск юзернеймов\n━━━━━━━━━━━━━━\n\n🚀 Твой юзернейм уже ждёт.\n🎯 Выбери, как его искать.\n\n👇 Режимы поиска", searchKeyboard); break;
     case "mode:five":
-      view = screen("📝 Юзернейм из 5 символов\nВыбери формат:", { inline_keyboard: [
+      view = screen("📝 Ник из 5 символов\n━━━━━━━━━━━━━━\n\n🔢 С цифрами — например ab1cd\n🔤 Без цифр — только буквы\n\n👇 Выбери формат", { inline_keyboard: [
         [{ text: "🔢 С цифрами", callback_data: "format:five:digits" }, { text: "🔤 Только буквы", callback_data: "format:five:letters" }],
         [{ text: "Назад", callback_data: "menu:search" }], ...backMain,
       ]}); break;
     case "mode:six":
-      view = screen("📝 Юзернейм из 6 символов\nВыбери формат:", { inline_keyboard: [
+      view = screen("📝 Ник из 6 символов\n━━━━━━━━━━━━━━\n\n🔢 С цифрами — например ab12cd\n🔤 Без цифр — только буквы\n\n👇 Выбери формат", { inline_keyboard: [
         [{ text: "🔢 С цифрами", callback_data: "format:six:digits" }, { text: "🔤 Только буквы", callback_data: "format:six:letters" }],
         [{ text: "Назад", callback_data: "menu:search" }], ...backMain,
       ]}); break;
@@ -1452,10 +1452,10 @@ async function handleCallback(callback: any) {
       return await runSearch(userId, chatId, "length_6", { digits: data.endsWith("digits") });
     case "mode:word":
       await setSession(userId, "await_word");
-      view = screen("✍️ Отправь слово или основу юзернейма латиницей. Я предложу варианты с окончаниями.", { inline_keyboard: [[{ text: "Отмена", callback_data: "menu:search" }], ...backMain]}); break;
+      view = screen("✍️ Поиск по слову\n━━━━━━━━━━━━━━\n\n🔤 Напиши слово или основу ника латиницей.\n✨ Подберу варианты с окончаниями.\n\n👇 Отправь слово одним сообщением.", { inline_keyboard: [[{ text: "Отмена", callback_data: "menu:search" }], ...backMain]}); break;
     case "mode:mask":
       await setSession(userId, "await_mask");
-      view = screen("🎭 Отправь маску длиной от 5 до 32 символов. Символ ? означает любую букву или цифру.\nПример: ab??_ или ?cool7", { inline_keyboard: [[{ text: "Отмена", callback_data: "menu:search" }], ...backMain]}); break;
+      view = screen("🎭 Поиск по маске\n━━━━━━━━━━━━━━\n\n🔎 Символ ? заменяет любую букву или цифру.\n📝 Длина маски — от 5 до 32 символов.\n\nПример: ab??_ или ?cool7\n\n👇 Отправь маску одним сообщением.", { inline_keyboard: [[{ text: "Отмена", callback_data: "menu:search" }], ...backMain]}); break;
     case "mode:trap":
       await showTrapMenu(chatId, messageId); return;
     case "search:again:length_5:1":

@@ -1,10 +1,14 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { TelegramClient, MemoryStorage } from "jsr:@mtcute/deno@0.32.8";
 
 const BOT_TOKEN = Deno.env.get("BOT_TOKEN") ?? "";
 const WEBHOOK_SECRET = Deno.env.get("TELEGRAM_WEBHOOK_SECRET") ?? "";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
 const TONCENTER_API_KEY = Deno.env.get("TONCENTER_API_KEY") ?? "";
+const TELEGRAM_API_ID = Number(Deno.env.get("TELEGRAM_API_ID") ?? "0");
+const TELEGRAM_API_HASH = Deno.env.get("TELEGRAM_API_HASH") ?? "";
+const TELEGRAM_SESSION_ENCRYPTION_KEY = Deno.env.get("TELEGRAM_SESSION_ENCRYPTION_KEY") ?? "";
 const GRAM_RECEIVE_ADDRESS = "UQDVnyA5v_uLgb7lh_JRe5RfPVhj0MebqrRt0LdlJkavsQuP";
 
 const BOT_OWNER_ID = 8032877285;
@@ -53,6 +57,148 @@ async function db(path: string, method = "GET", body?: unknown) {
   const text = await response.text();
   return text ? JSON.parse(text) : null;
 }
+function assertMtprotoConfig() {
+  if (!Number.isSafeInteger(TELEGRAM_API_ID) || TELEGRAM_API_ID <= 0 ||
+      !TELEGRAM_API_HASH || !TELEGRAM_SESSION_ENCRYPTION_KEY ||
+      TELEGRAM_SESSION_ENCRYPTION_KEY.length < 32) {
+    throw new Error("Не настроены секреты MTProto.");
+  }
+}
+async function mtprotoCryptoKey() {
+  assertMtprotoConfig();
+  const material = new TextEncoder().encode("skebob-telegram-session-v1:" + TELEGRAM_SESSION_ENCRYPTION_KEY);
+  const digest = await crypto.subtle.digest("SHA-256", material);
+  return await crypto.subtle.importKey("raw", digest, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+}
+async function encryptMtprotoPayload(payload: Record<string, unknown>): Promise<string> {
+  const key = await mtprotoCryptoKey();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const clear = new TextEncoder().encode(JSON.stringify(payload));
+  const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, clear));
+  const combined = new Uint8Array(iv.length + encrypted.length);
+  combined.set(iv, 0);
+  combined.set(encrypted, iv.length);
+  let binary = "";
+  for (const byte of combined) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+async function decryptMtprotoPayload(ciphertext: string): Promise<Record<string, unknown>> {
+  const key = await mtprotoCryptoKey();
+  const raw = Uint8Array.from(atob(ciphertext), (ch) => ch.charCodeAt(0));
+  const iv = raw.slice(0, 12);
+  const encrypted = raw.slice(12);
+  const clear = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, encrypted);
+  return JSON.parse(new TextDecoder().decode(clear));
+}
+async function getMtprotoState(): Promise<any | null> {
+  const rows = await db("telegram_mtproto_state?select=auth_stage,session_ciphertext,updated_at&id=eq.true&limit=1");
+  return Array.isArray(rows) && rows.length ? rows[0] : null;
+}
+async function saveMtprotoState(auth_stage: string, session_ciphertext: string | null) {
+  await db("telegram_mtproto_state?on_conflict=id", "POST", {
+    id: true, auth_stage, session_ciphertext, updated_at: new Date().toISOString(),
+  });
+}
+function newMtprotoClient() {
+  assertMtprotoConfig();
+  return new TelegramClient({
+    apiId: TELEGRAM_API_ID,
+    apiHash: TELEGRAM_API_HASH,
+    storage: new MemoryStorage(),
+  });
+}
+async function loadMtprotoClient(ciphertext: string) {
+  const tg = newMtprotoClient();
+  const payload = await decryptMtprotoPayload(ciphertext);
+  if (typeof payload.session !== "string" || !payload.session) throw new Error("Сессия Telegram повреждена.");
+  await tg.importSession(payload.session);
+  return { tg, payload };
+}
+async function finishMtprotoAuthorization(tg: any, chatId: number) {
+  const me = await tg.getMe();
+  if (me.isBot || Number(me.id) !== BOT_OWNER_ID) {
+    await saveMtprotoState("disconnected", null);
+    await show(chatId, "⛔ Авторизован не тот Telegram-аккаунт. Подключи аккаунт владельца бота и начни заново командой /mtlogin.", mainKeyboardFor(BOT_OWNER_ID));
+    return;
+  }
+  const session = await tg.exportSession();
+  const ciphertext = await encryptMtprotoPayload({ session });
+  await saveMtprotoState("authorized", ciphertext);
+  await show(chatId, "✅ Telegram-аккаунт подключён. Теперь поиск будет проверять доступность через официальный метод Telegram. Сессию сохранил в Supabase в зашифрованном виде.", mainKeyboardFor(BOT_OWNER_ID));
+}
+async function handleMtprotoAuthMessage(chatId: number, text: string, state: any) {
+  if (state.auth_stage === "await_phone") {
+    const phone = text.replace(/[\s()-]/g, "");
+    if (!/^\+?[0-9]{7,15}$/.test(phone)) {
+      await show(chatId, "Введи номер телефона в международном формате, например +491234567890.", { inline_keyboard: [[{ text: "Отмена", callback_data: "mtproto:cancel" }], ...backMain] });
+      return;
+    }
+    const tg = newMtprotoClient();
+    try {
+      const sent = await tg.sendCode({ phone });
+      const session = await tg.exportSession();
+      const ciphertext = await encryptMtprotoPayload({ session, phone, phoneCodeHash: sent.phoneCodeHash });
+      await saveMtprotoState("await_code", ciphertext);
+      await show(chatId, "📩 Telegram отправил код подтверждения. Открой сообщение от 777000 и введи сюда только код. Не отправляй его никому, кроме этого личного чата с ботом.", { inline_keyboard: [[{ text: "Отмена", callback_data: "mtproto:cancel" }], ...backMain] });
+    } catch (_error) {
+      await show(chatId, "⚠️ Не получилось запросить код Telegram. Проверь номер и попробуй снова через /mtlogin. Подробности и секреты не выводятся в чат.", mainKeyboardFor(BOT_OWNER_ID));
+    } finally {
+      await tg.disconnect().catch(() => {});
+    }
+    return;
+  }
+  if (state.auth_stage === "await_code") {
+    if (!/^[0-9]{4,8}$/.test(text)) {
+      await show(chatId, "Введи код из сообщения Telegram от 777000 — только цифры.", { inline_keyboard: [[{ text: "Отмена", callback_data: "mtproto:cancel" }], ...backMain] });
+      return;
+    }
+    const loaded = await loadMtprotoClient(state.session_ciphertext);
+    const tg = loaded.tg;
+    try {
+      try {
+        await tg.signIn({
+          phone: String(loaded.payload.phone ?? ""),
+          phoneCodeHash: String(loaded.payload.phoneCodeHash ?? ""),
+          phoneCode: text,
+        });
+        await finishMtprotoAuthorization(tg, chatId);
+      } catch (error) {
+        const message = String((error as Error)?.message ?? error);
+        if (message.includes("SESSION_PASSWORD_NEEDED")) {
+          const session = await tg.exportSession();
+          const ciphertext = await encryptMtprotoPayload({ session });
+          await saveMtprotoState("await_password", ciphertext);
+          await show(chatId, "🔐 У аккаунта включена двухэтапная защита. Введи пароль 2FA в этом личном чате с ботом. Не присылай его сюда, в ChatGPT или кому-либо ещё.", { inline_keyboard: [[{ text: "Отмена", callback_data: "mtproto:cancel" }], ...backMain] });
+        } else if (message.includes("PHONE_CODE_INVALID")) {
+          await show(chatId, "❌ Код неверный. Проверь сообщение от 777000 и введи код ещё раз.", { inline_keyboard: [[{ text: "Отмена", callback_data: "mtproto:cancel" }], ...backMain] });
+        } else if (message.includes("PHONE_CODE_EXPIRED")) {
+          await saveMtprotoState("await_phone", null);
+          await show(chatId, "⌛ Код устарел. Начни подключение заново командой /mtlogin.", mainKeyboardFor(BOT_OWNER_ID));
+        } else {
+          await show(chatId, "⚠️ Telegram не принял код. Попробуй ещё раз или начни заново через /mtlogin.", { inline_keyboard: [[{ text: "Отмена", callback_data: "mtproto:cancel" }], ...backMain] });
+        }
+      }
+    } finally {
+      await tg.disconnect().catch(() => {});
+    }
+    return;
+  }
+  if (state.auth_stage === "await_password") {
+    const loaded = await loadMtprotoClient(state.session_ciphertext);
+    const tg = loaded.tg;
+    try {
+      try {
+        await tg.checkPassword(text);
+        await finishMtprotoAuthorization(tg, chatId);
+      } catch (_error) {
+        await show(chatId, "❌ Не удалось подтвердить пароль 2FA. Проверь его и попробуй ещё раз.", { inline_keyboard: [[{ text: "Отмена", callback_data: "mtproto:cancel" }], ...backMain] });
+      }
+    } finally {
+      await tg.disconnect().catch(() => {});
+    }
+  }
+}
+
 
 function screen(text: string, reply_markup: unknown = { inline_keyboard: backMain }) {
   return { text, reply_markup };
@@ -194,25 +340,34 @@ async function handleStart(message: any) {
   await show(chatId, "👋 Привет, " + (user.first_name ?? "друг") + "!\n\nДобро пожаловать в Skebob Username.\nВыбери раздел 👇", mainKeyboardFor(user.id));
 }
 
-async function findLikelyAvailableUsername(candidates: string[]): Promise<string | null> {
-  // Public t.me pages cannot prove account.checkUsername availability.
-  // Only treat an explicit HTTP 404 as a weak signal; never label it guaranteed free.
-  for (const username of candidates.slice(0, 30)) {
-    try {
-      const response = await fetch("https://t.me/" + encodeURIComponent(username), {
-        method: "GET",
-        redirect: "manual",
-        headers: { "user-agent": "Mozilla/5.0" },
-      });
-      const html = await response.text();
-      const hasPublicProfile = /tgme_page_(?:title|description|extra)|tgme_page_photo/i.test(html);
-      if (response.status === 404 && !hasPublicProfile) return username;
-    } catch (error) {
-      console.warn("Public username check failed for", username, String(error));
-    }
-    await new Promise((resolve) => setTimeout(resolve, 350));
+async function findFreeUsername(candidates: string[]): Promise<string | null> {
+  const state = await getMtprotoState();
+  if (!state || state.auth_stage !== "authorized" || !state.session_ciphertext) {
+    throw new Error("Владелец ещё не подключил Telegram-аккаунт. Сначала выполни /mtlogin в личном чате с ботом.");
   }
-  return null;
+  const loaded = await loadMtprotoClient(state.session_ciphertext);
+  const tg = loaded.tg;
+  try {
+    const me = await tg.getMe();
+    if (me.isBot || Number(me.id) !== BOT_OWNER_ID) {
+      await saveMtprotoState("disconnected", null);
+      throw new Error("Подключённый Telegram-аккаунт не совпадает с аккаунтом владельца. Повтори /mtlogin.");
+    }
+    for (const username of candidates.slice(0, 60)) {
+      if (!/^[a-z][a-z0-9_]{4,31}$/.test(username)) continue;
+      try {
+        const available = await tg.call({ _: "account.checkUsername", username });
+        if (available === true) return username;
+      } catch (error) {
+        const message = String((error as Error)?.message ?? error);
+        if (!/USERNAME_(?:INVALID|OCCUPIED|PURCHASE_AVAILABLE)/.test(message)) throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 350));
+    }
+    return null;
+  } finally {
+    await tg.disconnect().catch(() => {});
+  }
 }
 
 function againSearchCallback(mode: string, digits: boolean): string {
@@ -249,7 +404,7 @@ async function runSearch(userId: number, chatId: number, mode: string, options: 
   });
   const checked: string[] = [];
   try {
-    const found = await findLikelyAvailableUsername(candidates);
+    const found = await findFreeUsername(candidates);
     if (found) checked.push(found);
   } catch (error) {
     await clearSession(userId);
@@ -745,7 +900,45 @@ async function handleMessage(message: any) {
     await show(chatId, "✅ Webhook обновлён. Проверки будут выполняться в одном регионе и последовательно.", mainKeyboardFor(userId));
     return;
   }
+  if (text.startsWith("/mtlogin")) {
+    if (userId !== BOT_OWNER_ID || message.chat.type !== "private") {
+      await show(chatId, "⛔ Эта команда доступна только владельцу в личном чате с ботом.", mainKeyboardFor(userId));
+      return;
+    }
+    try {
+      assertMtprotoConfig();
+      await saveMtprotoState("await_phone", null);
+      await show(chatId, "🔐 Подключение Telegram-аккаунта\n\nОтправь номер телефона в международном формате. Telegram пришлёт код от 777000. Код и пароль 2FA вводи только в этом личном чате с ботом.", { inline_keyboard: [[{ text: "Отмена", callback_data: "mtproto:cancel" }], ...backMain] });
+    } catch (_error) {
+      await show(chatId, "⚠️ Не настроены секреты MTProto или ключ шифрования. Добавь TELEGRAM_SESSION_ENCRYPTION_KEY в Supabase Secrets (не менее 32 символов), затем повтори /mtlogin.", mainKeyboardFor(userId));
+    }
+    return;
+  }
+  if (text === "/mtstatus") {
+    if (userId !== BOT_OWNER_ID || message.chat.type !== "private") return;
+    const state = await getMtprotoState();
+    const status = state?.auth_stage === "authorized" ? "✅ Аккаунт подключён"
+      : state?.auth_stage === "await_code" ? "⏳ Ожидается код Telegram"
+      : state?.auth_stage === "await_password" ? "⏳ Ожидается пароль 2FA"
+      : state?.auth_stage === "await_phone" ? "⏳ Ожидается номер телефона"
+      : "❌ Аккаунт не подключён";
+    await show(chatId, "Статус проверки: " + status, mainKeyboardFor(userId));
+    return;
+  }
+  if (text === "/mtcancel") {
+    if (userId !== BOT_OWNER_ID || message.chat.type !== "private") return;
+    await saveMtprotoState("disconnected", null);
+    await show(chatId, "Подключение отменено. Если аккаунт уже был подключён, его активная сессия Telegram остаётся в настройках аккаунта; здесь удалена только копия из Supabase.", mainKeyboardFor(userId));
+    return;
+  }
   if (text.startsWith("/start")) return await handleStart(message);
+  if (userId === BOT_OWNER_ID && message.chat.type === "private") {
+    const mtState = await getMtprotoState();
+    if (mtState && ["await_phone", "await_code", "await_password"].includes(mtState.auth_stage)) {
+      await handleMtprotoAuthMessage(chatId, text, mtState);
+      return;
+    }
+  }
   const session = await getSession(userId);
   if (!session) {
     await show(chatId, "Выбери режим в меню поиска, чтобы начать 👇", mainKeyboardFor(userId));
@@ -825,6 +1018,12 @@ async function handleCallback(callback: any) {
   if (!chatId || !messageId) return;
   await telegram("answerCallbackQuery", { callback_query_id: callback.id });
 
+  if (data === "mtproto:cancel") {
+    if (userId !== BOT_OWNER_ID) return;
+    await saveMtprotoState("disconnected", null);
+    await editScreen(chatId, messageId, "Подключение отменено. Активную сессию Telegram можно отозвать в Настройки → Устройства.", { inline_keyboard: [[{ text: "В меню", callback_data: "menu:home" }], ...backMain] });
+    return;
+  }
   if (data === "admin:premium") {
     if (userId !== BOT_OWNER_ID) {
       await telegram("answerCallbackQuery", { callback_query_id: callback.id, text: "Нет доступа", show_alert: true });

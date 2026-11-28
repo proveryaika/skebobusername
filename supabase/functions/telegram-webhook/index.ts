@@ -459,7 +459,7 @@ async function findFreeUsername(candidates: string[]): Promise<string | null> {
       await saveMtprotoState("disconnected", null);
       throw new Error("Подключённый Telegram-аккаунт не совпадает с аккаунтом владельца. Повтори /mtlogin.");
     }
-    for (const username of candidates.slice(0, 120)) {
+    for (const username of candidates.slice(0, 240)) {
       if (!/^[a-z][a-z0-9_]{4,31}$/.test(username)) continue;
       try {
         const available = await tg.call({ _: "account.checkUsername", username });
@@ -468,7 +468,7 @@ async function findFreeUsername(candidates: string[]): Promise<string | null> {
         const message = String((error as Error)?.message ?? error);
         if (!/USERNAME_(?:INVALID|OCCUPIED|PURCHASE_AVAILABLE)/.test(message)) throw error;
       }
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      await new Promise((resolve) => setTimeout(resolve, 150));
     }
     return null;
   } finally {
@@ -486,13 +486,13 @@ async function runSearch(userId: number, chatId: number, mode: string, options: 
   let candidates: string[];
   const searchMode = await getSearchMode(userId);
   if (mode === "length_5") candidates = searchMode === "readable" && !options.digits
-    ? unique(Array.from({ length: 120 }, () => generateReadable(5))) : generateByLength(5, options.digits ?? false, 120);
+    ? unique(Array.from({ length: 240 }, () => generateReadable(5))) : generateByLength(5, options.digits ?? false, 240);
   else if (mode === "length_6") candidates = searchMode === "readable" && !options.digits
-    ? unique(Array.from({ length: 120 }, () => generateReadable(6))) : generateByLength(6, options.digits ?? false, 120);
-  else if (mode === "word") candidates = generateFromWord(options.query ?? "", 120);
-  else if (mode === "mask") candidates = generateFromMask(options.query ?? "", 120);
+    ? unique(Array.from({ length: 240 }, () => generateReadable(6))) : generateByLength(6, options.digits ?? false, 240);
+  else if (mode === "word") candidates = generateFromWord(options.query ?? "", 240);
+  else if (mode === "mask") candidates = generateFromMask(options.query ?? "", 240);
   else candidates = searchMode === "readable"
-    ? unique(Array.from({ length: 60 }, () => generateReadable(6))) : generateTrap(120);
+    ? unique(Array.from({ length: 60 }, () => generateReadable(6))) : generateTrap(240);
 
   const quota = await db("rpc/consume_daily_search", "POST", {
     p_telegram_id: userId, p_mode: mode, p_include_digits: options.digits ?? null,
